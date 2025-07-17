@@ -744,6 +744,11 @@ static NTSTATUS x11drv_init( void *arg )
 
     setup_options();
 
+    // HACK: Allow overriding use_take_focus with env. var, besides regedit.
+    // Useful for Unity games losing inputs after alt-tab.
+    if (getenv("WINE_USE_TAKE_FOCUS") && atoi(getenv("WINE_USE_TAKE_FOCUS")))
+        use_take_focus = FALSE;
+
     /* Open display */
 
     if (!XInitThreads()) ERR( "XInitThreads failed, trouble ahead\n" );
