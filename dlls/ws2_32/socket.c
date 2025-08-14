@@ -1321,6 +1321,29 @@ int WINAPI closesocket( SOCKET s )
     return 0;
 }
 
+static BOOL is_mhy(void)
+{
+    static volatile char cache = -1;
+    BOOL ret = cache;
+    if (ret == -1)
+    {
+        const WCHAR *p, *name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+        const char *env = getenv("WINE_ENABLE_DISCONNECT");
+        
+        /* Check for known games */ 
+        if ((p = wcsrchr(name, '/')))
+            name = p + 1;
+        if ((p = wcsrchr(name, '\\')))
+            name = p + 1;
+        ret = (!wcsicmp(name, L"StarRail.exe"));
+        cache = ret;
+
+        /* Also check by env. var */
+        if (env && atoi(env))
+            ret = TRUE;
+    }
+    return ret;
+}
 
 /***********************************************************************
  *      connect   (ws2_32.4)
@@ -1331,6 +1354,18 @@ int WINAPI connect( SOCKET s, const struct sockaddr *addr, int len )
     IO_STATUS_BLOCK io;
     HANDLE sync_event;
     NTSTATUS status;
+    static int count = 0;
+    const char* env = getenv("WINE_DISABLE_DISCONNECT");
+
+    // HACK: Block first connection for mhy games
+    // can be disabled with WINE_DISABLE_DISCONNECT=1
+    if (!count && !(env && atoi(env) == 1) && is_mhy())
+    {
+        FIXME("Toggle detected, disabling first connection..\n");
+        count = 1;
+        WSASetLastError(WSAECONNREFUSED);
+        return SOCKET_ERROR;
+    }
 
     char *unix_path = NULL;
     int unix_varargs_size = 0;
