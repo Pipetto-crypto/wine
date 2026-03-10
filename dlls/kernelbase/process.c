@@ -962,6 +962,15 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessInternalW( HANDLE token, const WCHAR 
     RtlDestroyProcessParameters( params );
     if (tidy_cmdline != cmd_line) HeapFree( GetProcessHeap(), 0, tidy_cmdline );
     HeapFree( GetProcessHeap(), 0, product_name );
+
+    /* HACK: delay return when VersionService.exe is involved to give it time to initialize */
+    if ((app_name && wcsstr( app_name, L"VersionService.exe" )) ||
+        (cmd_line && wcsstr( cmd_line, L"VersionService.exe" )))
+    {
+        FIXME( "HACK: sleeping 1000ms after launching VersionService.exe\n" );
+        Sleep( 1000 );
+    }
+
     return set_ntstatus( status );
 }
 
