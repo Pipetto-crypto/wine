@@ -3992,6 +3992,58 @@ int WINAPI WSAAsyncSelect( SOCKET s, HWND window, UINT message, LONG mask )
     return status ? -1 : 0;
 }
 
+static BOOL is_need_timeout_fix(void)
+{
+    static volatile char cache = -1;
+    BOOL ret = cache;
+    if (ret == -1)
+    {
+        const char *env = getenv("WINE_ENABLE_TIMEOUT_FIX");
+        ret = (env && atoi(env));
+        cache = ret;
+    }
+    return ret;
+}
+
+static void fix_curl_timeout(void)
+{
+    static _Atomic DWORD count = 0;
+    static const BYTE timeout_buf[] = {0x60, 0xea, 0x00, 0x00, 0x60, 0xea, 0x00, 0x00};
+    HANDLE heap;
+    BYTE *data;
+    PROCESS_HEAP_ENTRY entry;
+
+    if (count >= 2 || !is_need_timeout_fix())
+        return;
+
+    TRACE("HACK: WSACreateEvent fixing curl timeout :xdd:\n");
+    count++;
+
+    heap = GetProcessHeap();
+    HeapLock(heap);
+
+    entry.lpData = NULL;
+    entry.wFlags = PROCESS_HEAP_REGION;
+
+    while (HeapWalk(heap, &entry))
+    {
+        if (entry.cbData < 4)
+            continue;
+        if (!(entry.wFlags & PROCESS_HEAP_ENTRY_BUSY))
+            continue;
+
+        data = entry.lpData;
+        if (data[0] == 0xAD && data[1] == 0xDB && data[2] == 0xDE && data[3] == 0xC0)
+        {
+            if (entry.cbData < 0x300)
+                continue;
+            memcpy(data + 0x2f8, timeout_buf, sizeof(timeout_buf));
+            TRACE("HACK: WSACreateEvent adjusted curl timeout to 5000ms in memory at %p\n", data + 0x2f8);
+        }
+    }
+
+    HeapUnlock(heap);
+}
 
 /***********************************************************************
  *      WSACreateEvent          (WS2_32.31)
@@ -4001,6 +4053,8 @@ WSAEVENT WINAPI WSACreateEvent(void)
 {
     /* Create a manual-reset event, with initial state: unsignaled */
     TRACE("\n");
+
+    fix_curl_timeout();
 
     return CreateEventW(NULL, TRUE, FALSE, NULL);
 }
