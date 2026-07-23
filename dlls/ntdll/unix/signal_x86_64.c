@@ -2742,7 +2742,25 @@ static void fpe_handler( int signal, siginfo_t *siginfo, void *sigcontext )
         rec.NumberParameters = 2;
         rec.ExceptionInformation[0] = 0;
         rec.ExceptionInformation[1] = context.c.FltSave.MxCsr;
-        if (CS_sig(ucontext) != cs64_sel) rec.ExceptionCode = STATUS_FLOAT_MULTIPLE_TRAPS;
+        if (CS_sig(ucontext) != cs64_sel)
+        {
+            switch (siginfo->si_code)
+            {
+            case FPE_FLTDIV:
+            case FPE_FLTINV:
+                rec.ExceptionCode = STATUS_FLOAT_MULTIPLE_TRAPS;
+                break;
+            case FPE_FLTOVF:
+            case FPE_FLTUND:
+            case FPE_FLTRES:
+                rec.ExceptionCode = STATUS_FLOAT_MULTIPLE_FAULTS;
+                break;
+            default:
+                FIXME("unknown SIMD exception: %#x\n", siginfo->si_code);
+                rec.ExceptionCode = STATUS_FLOAT_MULTIPLE_TRAPS;
+                break;
+            }
+        }
     }
     setup_raise_exception( sigcontext, &rec, &context );
 }
