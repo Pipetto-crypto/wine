@@ -24,6 +24,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "windef.h"
 #include "winbase.h"
 #include "wintrust.h"
@@ -68,6 +69,29 @@ struct catinfo
     DWORD magic;
     WCHAR file[MAX_PATH];
 };
+
+static BOOL needs_cryptstub(void)
+{
+    static int cache = -1;
+
+    const WCHAR *name, *p;
+    const char *env;
+
+    if (cache != -1) return cache;
+
+    if ((env = getenv("WINE_DISABLE_CRYPTSTUB")) && atoi(env))
+    {
+        cache = 0;
+        return cache;
+    }
+
+    name = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+    if (!name) return FALSE;
+    if ((p = wcsrchr(name, '/'))) name = p + 1;
+    if ((p = wcsrchr(name, '\\'))) name = p + 1;
+    cache = !lstrcmpiW(name, L"StarRail.exe");
+    return cache;
+}
 
 static HCATINFO create_catinfo(const WCHAR *filename)
 {
@@ -470,6 +494,8 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
     static const WCHAR slashW[] = {'\\',0};
     static const WCHAR globW[]  = {'\\','*','.','c','a','t',0};
 
+    static LONG once;
+
     struct catadmin *ca = hCatAdmin;
     WIN32_FIND_DATAW data;
     HCATINFO prev = NULL;
@@ -478,6 +504,11 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
     BOOL ret;
 
     TRACE("%p %p %ld %lx %p\n", hCatAdmin, pbHash, cbHash, dwFlags, phPrevCatInfo);
+
+    if (!once && needs_cryptstub() && !InterlockedExchange(&once, 1))
+    {
+        return (HCATINFO)1;
+    }
 
     if (!ca || ca->magic != CATADMIN_MAGIC || !pbHash || cbHash != 20 || dwFlags)
     {
@@ -599,10 +630,17 @@ BOOL WINAPI CryptCATAdminReleaseCatalogContext(HCATADMIN hCatAdmin,
                                                HCATINFO hCatInfo,
                                                DWORD dwFlags)
 {
+    static LONG once;
+
     struct catinfo *ci = hCatInfo;
     struct catadmin *ca = hCatAdmin;
 
     TRACE("%p %p %lx\n", hCatAdmin, hCatInfo, dwFlags);
+
+    if (!once && needs_cryptstub() && !InterlockedExchange(&once, 1))
+    {
+        return 1;
+    }
 
     if (!ca || ca->magic != CATADMIN_MAGIC || !ci || ci->magic != CATINFO_MAGIC)
     {
@@ -1022,9 +1060,16 @@ out:
  */
 BOOL WINAPI CryptCATCatalogInfoFromContext(HCATINFO hcatinfo, CATALOG_INFO *info, DWORD flags)
 {
+    static LONG once;
+
     struct catinfo *ci = hcatinfo;
 
     TRACE("%p, %p, %lx\n", hcatinfo, info, flags);
+
+    if (!once && needs_cryptstub() && !InterlockedExchange(&once, 1))
+    {
+        return 1;
+    }
 
     if (!hcatinfo || hcatinfo == INVALID_HANDLE_VALUE || ci->magic != CATINFO_MAGIC ||
         flags || !info || info->cbStruct != sizeof(*info))
