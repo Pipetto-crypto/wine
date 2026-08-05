@@ -471,6 +471,7 @@ HKLM,Software\Microsoft\DirectPlay\Service Providers\Serial Connection For Direc
 HKLM,Software\Microsoft\DirectPlay\Service Providers\Serial Connection For DirectPlay,"Path",,"dpmodemx.dll"
 
 [SessionMgr]
+HKLM,%Control%,"SystemStartOptions",,"NOEXECUTE=OPTIN"
 HKLM,%Control%\Session Manager,CriticalSectionTimeout,0x00040002,0x00278d00
 HKLM,%Control%\Session Manager,GlobalFlag,0x00040002,0
 HKLM,%Control%\Session Manager,HeapDeCommitFreeBlockThreshold,0x00040002,0
