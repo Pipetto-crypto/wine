@@ -30,6 +30,7 @@ static void dump_varargs_directory_file_entries( const char *prefix, data_size_t
 static void dump_varargs_filesystem_event( const char *prefix, data_size_t size );
 static void dump_varargs_handle_infos( const char *prefix, data_size_t size );
 static void dump_varargs_ints( const char *prefix, data_size_t size );
+static void dump_varargs_kernel_module_info( const char *prefix, data_size_t size );
 static void dump_varargs_luid_attr( const char *prefix, data_size_t size );
 static void dump_varargs_message_data( const char *prefix, data_size_t size );
 static void dump_varargs_monitor_infos( const char *prefix, data_size_t size );
@@ -3069,6 +3070,29 @@ static void dump_set_kernel_object_ptr_request( const struct set_kernel_object_p
     dump_uint64( ", user_ptr=", &req->user_ptr );
 }
 
+static void dump_register_kernel_module_request( const struct register_kernel_module_request *req )
+{
+    dump_uint64( " base=", &req->base );
+    dump_uint64( ", size=", &req->size );
+    dump_varargs_unicode_str( ", name=", cur_size );
+}
+
+static void dump_unregister_kernel_module_request( const struct unregister_kernel_module_request *req )
+{
+    dump_uint64( " base=", &req->base );
+}
+
+static void dump_list_kernel_modules_request( const struct list_kernel_modules_request *req )
+{
+}
+
+static void dump_list_kernel_modules_reply( const struct list_kernel_modules_reply *req )
+{
+    fprintf( stderr, " module_count=%08x", req->module_count );
+    fprintf( stderr, ", info_size=%u", req->info_size );
+    dump_varargs_kernel_module_info( ", info=", cur_size );
+}
+
 static void dump_grab_kernel_object_request( const struct grab_kernel_object_request *req )
 {
     fprintf( stderr, " manager=%04x", req->manager );
@@ -3856,6 +3880,9 @@ static const dump_func req_dumpers[REQ_NB_REQUESTS] =
     (dump_func)dump_get_next_device_request_request,
     (dump_func)dump_get_kernel_object_ptr_request,
     (dump_func)dump_set_kernel_object_ptr_request,
+    (dump_func)dump_register_kernel_module_request,
+    (dump_func)dump_unregister_kernel_module_request,
+    (dump_func)dump_list_kernel_modules_request,
     (dump_func)dump_grab_kernel_object_request,
     (dump_func)dump_release_kernel_object_request,
     (dump_func)dump_get_kernel_object_handle_request,
@@ -4175,6 +4202,9 @@ static const dump_func reply_dumpers[REQ_NB_REQUESTS] =
     NULL,
     NULL,
     NULL,
+    (dump_func)dump_list_kernel_modules_reply,
+    NULL,
+    NULL,
     (dump_func)dump_get_kernel_object_handle_reply,
     (dump_func)dump_make_process_system_reply,
     NULL,
@@ -4490,6 +4520,9 @@ static const char * const req_names[REQ_NB_REQUESTS] =
     "get_next_device_request",
     "get_kernel_object_ptr",
     "set_kernel_object_ptr",
+    "register_kernel_module",
+    "unregister_kernel_module",
+    "list_kernel_modules",
     "grab_kernel_object",
     "release_kernel_object",
     "get_kernel_object_handle",

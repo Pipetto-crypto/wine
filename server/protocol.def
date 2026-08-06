@@ -394,6 +394,14 @@ struct luid_attr
     unsigned int attrs;
 };
 
+struct kernel_module_info
+{
+    client_ptr_t base;
+    mem_size_t   size;
+    data_size_t  name_len;
+    /* VARARG(name,unicode_str,name_len); */
+};
+
 struct acl
 {
     unsigned char  revision;
@@ -3867,6 +3875,25 @@ struct handle_info
     client_ptr_t user_ptr;        /* kernel object pointer */
 @END
 
+/* Register a loaded kernel module */
+@REQ(register_kernel_module)
+    client_ptr_t base;            /* module base address */
+    mem_size_t   size;            /* module size */
+    VARARG(name,unicode_str);     /* module name */
+@END
+
+/* Unregister a kernel module */
+@REQ(unregister_kernel_module)
+    client_ptr_t base;            /* module base address */
+@END
+
+/* Return the list of loaded kernel modules */
+@REQ(list_kernel_modules)
+@REPLY
+    unsigned int module_count;    /* number of modules */
+    data_size_t  info_size;       /* total size of module info */
+    VARARG(info,kernel_module_info); /* module info */
+@END
 
 /* Grab server object reference from kernel object pointer */
 @REQ(grab_kernel_object)

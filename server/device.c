@@ -39,6 +39,20 @@
 #include "request.h"
 #include "process.h"
 
+/* loaded kernel module */
+
+struct kernel_module
+{
+    struct list      entry;      /* entry in kernel_modules list */
+    struct process  *owner;      /* process that registered it, not a reference */
+    client_ptr_t     base;       /* module base address in the owner process */
+    mem_size_t       size;       /* module size */
+    WCHAR           *name;       /* module name */
+    data_size_t      name_len;   /* length of name in bytes */
+};
+
+static struct list kernel_modules = LIST_INIT(kernel_modules);
+
 /* IRP object */
 
 struct irp_call
@@ -1169,3 +1183,83 @@ DECL_HANDLER(get_kernel_object_handle)
 
     release_object( manager );
 }
+
+
+/* register a newly loaded kernel module */
+DECL_HANDLER(register_kernel_module)
+{
+    struct kernel_module *module;
+
+    if (!(module = mem_alloc( sizeof(*module) ))) return;
+
+    module->name_len = get_req_data_size();
+    module->name = NULL;
+
+    if (module->name_len && !(module->name = memdup( get_req_data(), module->name_len )))
+    {
+        free( module );
+        return;
+    }
+
+    module->owner = current->process;
+    module->base = req->base;
+    module->size = req->size;
+    list_add_tail( &kernel_modules, &module->entry );
+}
+
+
+/* unregister a kernel module that is being unloaded */
+DECL_HANDLER(unregister_kernel_module)
+{
+    struct kernel_module *module;
+
+    /* a module is identified by its base address within its owner process */
+    LIST_FOR_EACH_ENTRY( module, &kernel_modules, struct kernel_module, entry )
+    {
+        if (module->base == req->base && module->owner == current->process)
+        {
+            list_remove( &module->entry );
+            free( module->name );
+            free( module );
+            return;
+        }
+    }
+}
+
+
+/* return the list of currently loaded kernel modules */
+DECL_HANDLER(list_kernel_modules)
+{
+    struct kernel_module *module;
+    char *data;
+
+    LIST_FOR_EACH_ENTRY( module, &kernel_modules, struct kernel_module, entry )
+    {
+        reply->module_count++;
+        reply->info_size += (sizeof(struct kernel_module_info) + module->name_len
+                             + sizeof(client_ptr_t)-1) / sizeof(client_ptr_t) * sizeof(client_ptr_t);
+    }
+
+    if (reply->info_size > get_reply_max_size())
+    {
+        set_error( STATUS_INFO_LENGTH_MISMATCH );
+        return;
+    }
+
+    if (!(data = set_reply_data_size( reply->info_size ))) return;
+
+    memset( data, 0, reply->info_size );
+
+    LIST_FOR_EACH_ENTRY( module, &kernel_modules, struct kernel_module, entry )
+    {
+        struct kernel_module_info *info = (struct kernel_module_info *)data;
+
+        info->base     = module->base;
+        info->size     = module->size;
+        info->name_len = module->name_len;
+        memcpy( info + 1, module->name, module->name_len );
+        data += (sizeof(*info) + module->name_len
+                 + sizeof(client_ptr_t)-1) / sizeof(client_ptr_t) * sizeof(client_ptr_t);
+    }
+}
+
