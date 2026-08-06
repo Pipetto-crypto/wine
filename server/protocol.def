@@ -3907,6 +3907,13 @@ struct handle_info
 @END
 
 
+/* Move a process to a different terminal services session */
+@REQ(set_process_session)
+    obj_handle_t handle;          /* handle to the process */
+    unsigned int session_id;      /* new session id */
+@END
+
+
 /* Get detailed fixed-size information about a token */
 @REQ(get_token_info)
     obj_handle_t   handle;        /* handle to the object */

@@ -1882,6 +1882,24 @@ DECL_HANDLER(grant_process_admin_token)
     release_object( process );
 }
 
+/* move a process to a different terminal services session */
+DECL_HANDLER(set_process_session)
+{
+    struct process *process;
+
+    if (!(process = get_process_from_handle( req->handle, PROCESS_SET_INFORMATION )))
+        return;
+
+    if (process->token)
+    {
+        token_set_session_id( process->token, req->session_id );
+        process->session_id = req->session_id;
+    }
+    else set_error( STATUS_NO_TOKEN );
+
+    release_object( process );
+}
+
 /* create a new job object */
 DECL_HANDLER(create_job)
 {
