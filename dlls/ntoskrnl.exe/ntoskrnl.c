@@ -889,6 +889,7 @@ static void unload_driver( struct wine_rb_entry *entry, void *context )
     struct wine_driver *driver = WINE_RB_ENTRY_VALUE( entry, struct wine_driver, entry );
     SERVICE_STATUS_HANDLE service_handle = driver->service_handle;
     LDR_DATA_TABLE_ENTRY *ldr;
+    client_ptr_t base;
 
     if (!service_handle) return;    /* not a service */
 
@@ -901,6 +902,7 @@ static void unload_driver( struct wine_rb_entry *entry, void *context )
     }
 
     ldr = driver->driver_obj.DriverSection;
+    base = wine_server_client_ptr( driver->driver_obj.DriverStart );
 
     set_service_status( service_handle, SERVICE_STOP_PENDING, 0 );
 
@@ -909,6 +911,13 @@ static void unload_driver( struct wine_rb_entry *entry, void *context )
     driver->driver_obj.DriverUnload( &driver->driver_obj );
 
     TRACE_(relay)( "\1Ret  driver unload %p (obj=%p)\n", driver->driver_obj.DriverUnload, &driver->driver_obj );
+
+    SERVER_START_REQ( unregister_kernel_module )
+    {
+        req->base = base;
+        wine_server_call( req );
+    }
+    SERVER_END_REQ;
 
     FreeLibrary( ldr->DllBase );
     IoDeleteDriver( &driver->driver_obj );
@@ -4555,6 +4564,15 @@ static NTSTATUS WINAPI init_driver( DRIVER_OBJECT *driver_object, UNICODE_STRING
     driver_object->DriverSection = find_ldr_module( module );
     driver_object->DriverStart = ((LDR_DATA_TABLE_ENTRY *)driver_object->DriverSection)->DllBase;
     driver_object->DriverSize = ((LDR_DATA_TABLE_ENTRY *)driver_object->DriverSection)->SizeOfImage;
+
+    SERVER_START_REQ( register_kernel_module )
+    {
+        req->base = wine_server_client_ptr( driver_object->DriverStart );
+        req->size = driver_object->DriverSize;
+        wine_server_add_data( req, driver_name, wcslen( driver_name ) * sizeof(WCHAR) );
+        wine_server_call( req );
+    }
+    SERVER_END_REQ;
 
     nt = RtlImageNtHeader( module );
     if (!nt->OptionalHeader.AddressOfEntryPoint) return STATUS_SUCCESS;
