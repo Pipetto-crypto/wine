@@ -35,7 +35,7 @@ cpp_quote("#define SVCCTL_ENDPOINT {'\\\\','p','i','p','e','\\\\','s','v','c','c
 cpp_quote("#define SVCCTL_ENDPOINTA \"\\\\pipe\\\\svcctl\"")
 
 /* Not the Windows event name - if needed the true one can be found in Inside Windows */
-cpp_quote("#define SVCCTL_STARTED_EVENT {'_','_','w','i','n','e','_','S','v','c','c','t','l','S','t','a','r','t','e','d',0}")
+cpp_quote("#define SVCCTL_STARTED_EVENT {'G','l','o','b','a','l','\\\\','_','_','w','i','n','e','_','S','v','c','c','t','l','S','t','a','r','t','e','d',0}")
 
 /* Service startup protocol over control pipe - not compatible with Windows */
 cpp_quote("#define SERVICE_PROTOCOL_MAGIC 0x57494e45")
