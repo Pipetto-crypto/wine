@@ -812,6 +812,7 @@ static void process_destroy( struct object *obj )
 
     close_process_handles( process );
     set_process_startup_state( process, STARTUP_ABORTED );
+    free_kernel_modules( process );
 
     if (process->job)
     {

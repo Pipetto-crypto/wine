@@ -902,6 +902,22 @@ void free_kernel_objects( struct object *obj )
 }
 
 
+/* remove the modules of a process that is going away, a winedevice may
+ * die without unloading its drivers */
+void free_kernel_modules( struct process *process )
+{
+    struct kernel_module *module, *next;
+
+    LIST_FOR_EACH_ENTRY_SAFE( module, next, &kernel_modules, struct kernel_module, entry )
+    {
+        if (module->owner != process) continue;
+        list_remove( &module->entry );
+        free( module->name );
+        free( module );
+    }
+}
+
+
 /* create a device manager */
 DECL_HANDLER(create_device_manager)
 {
