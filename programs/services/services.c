@@ -1302,7 +1302,13 @@ int __cdecl main(int argc, char *argv[])
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_limit;
     JOBOBJECT_ASSOCIATE_COMPLETION_PORT port_info;
     HANDLE started_event, process_monitor_thread;
+    ULONG session_id = 0;
+    WCHAR env[2];
     DWORD err;
+
+    if (GetEnvironmentVariableW(L"WINE_SERVICES_SESSION0", env, ARRAY_SIZE(env)) == 1 && env[0] == '1')
+        NtSetInformationProcess(GetCurrentProcess(), ProcessWineSessionId,
+                                &session_id, sizeof(session_id));
 
     job_object = CreateJobObjectW(NULL, NULL);
     job_limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
