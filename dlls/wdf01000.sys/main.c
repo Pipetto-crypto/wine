@@ -122,6 +122,12 @@ static WDF_LIBRARY_INFO kmdf_wdf_library_info = {
     { 1, 0, 0 }
 };
 
+/* stub for WdfDriverMiniportUnload (idx 201) */
+static void WINAPI wdf_stub_void_noop(void *arg)
+{
+    TRACE("stub called with %p\n", arg);
+}
+
 NTSTATUS WINAPI DriverEntry(DRIVER_OBJECT *driver, UNICODE_STRING *path)
 {
     NTSTATUS status;
@@ -130,6 +136,9 @@ NTSTATUS WINAPI DriverEntry(DRIVER_OBJECT *driver, UNICODE_STRING *path)
 
     kmdf_globals.DriverObject = driver;
     kmdf_globals.RegistryPath = path;
+
+    /* populate index 201 (WdfDriverMiniportUnload) */
+    kmdf_functable[201] = wdf_stub_void_noop;
 
     status = WdfRegisterLibrary(&kmdf_wdf_library_info, path, NULL);
 
