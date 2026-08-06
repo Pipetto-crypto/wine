@@ -1,3 +1,4 @@
 MODULE  = wdfldr.sys
+IMPORTS = ntoskrnl.exe
 
 SOURCES = wdfldr_main.c
