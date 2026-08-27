@@ -4439,7 +4439,7 @@ static HRESULT WINAPI bytestream_read_callback_Invoke(IRtwqAsyncCallback *iface,
 
 static HRESULT WINAPI bytestream_write_callback_Invoke(IRtwqAsyncCallback *iface, IRtwqAsyncResult *result)
 {
-    struct bytestream *stream = impl_from_read_callback_IRtwqAsyncCallback(iface);
+    struct bytestream *stream = impl_from_write_callback_IRtwqAsyncCallback(iface);
     struct async_stream_op *op;
     IUnknown *object;
     HRESULT hr;
