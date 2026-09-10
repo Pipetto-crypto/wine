@@ -1,2 +1,8 @@
 build*
 wine-tools
+tools/config.guess~
+tools/config.sub~
+configure
+tools/config.guess
+tools/config.sub
+configure~
