@@ -1250,7 +1250,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &wave_parser_cf;
     else if (IsEqualGUID(clsid, &CLSID_WMADecMediaObject))
         factory = &wma_decoder_cf;
-    else if (IsEqualGUID(clsid, &CLSID_WMVDecoderMFT))
+    else if (IsEqualGUID(clsid, &CLSID_wg_wmv_decoder))
         factory = &wmv_decoder_cf;
     else if (IsEqualGUID(clsid, &CLSID_CResamplerMediaObject))
         factory = &resampler_cf;
@@ -1543,31 +1543,6 @@ HRESULT WINAPI DllRegisterServer(void)
         {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_WMAUDIO3},
         {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_WMAUDIO_LOSSLESS},
     };
-    DMO_PARTIAL_MEDIATYPE wmv_decoder_output[11] =
-    {
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_YV12},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_YUY2},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_UYVY},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_YVYU},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_NV11},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_NV12},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_RGB32},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_RGB24},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_RGB565},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_RGB555},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_RGB8},
-    };
-    DMO_PARTIAL_MEDIATYPE wmv_decoder_input[8] =
-    {
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WMV1},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WMV2},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WMV3},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WMVA},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WVC1},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WMVP},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_WVP2},
-        {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_VC1S},
-    };
     DMO_PARTIAL_MEDIATYPE color_convert_input[20] =
     {
         {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_YV12},
@@ -1641,9 +1616,6 @@ HRESULT WINAPI DllRegisterServer(void)
     if (FAILED(hr = DMORegister(L"WMAudio Decoder DMO", &CLSID_WMADecMediaObject, &DMOCATEGORY_AUDIO_DECODER,
             0, ARRAY_SIZE(wma_decoder_input), wma_decoder_input, ARRAY_SIZE(wma_decoder_output), wma_decoder_output)))
         return hr;
-    if (FAILED(hr = DMORegister(L"WMVideo Decoder DMO", &CLSID_WMVDecoderMFT, &DMOCATEGORY_VIDEO_DECODER,
-            0, ARRAY_SIZE(wmv_decoder_input), wmv_decoder_input, ARRAY_SIZE(wmv_decoder_output), wmv_decoder_output)))
-        return hr;
     if (FAILED(hr = DMORegister(L"Resampler DMO", &CLSID_CResamplerMediaObject, &DMOCATEGORY_AUDIO_EFFECT,
             0, ARRAY_SIZE(audio_convert_types), audio_convert_types, ARRAY_SIZE(audio_convert_types), audio_convert_types)))
         return hr;
@@ -1683,8 +1655,6 @@ HRESULT WINAPI DllUnregisterServer(void)
     if (FAILED(hr = DMOUnregister(&CLSID_CResamplerMediaObject, &DMOCATEGORY_AUDIO_EFFECT)))
         return hr;
     if (FAILED(hr = DMOUnregister(&CLSID_WMADecMediaObject, &DMOCATEGORY_AUDIO_DECODER)))
-        return hr;
-    if (FAILED(hr = DMOUnregister(&CLSID_WMVDecoderMFT, &DMOCATEGORY_VIDEO_DECODER)))
         return hr;
 
     return S_OK;
