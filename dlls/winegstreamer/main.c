@@ -1248,7 +1248,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &mpeg_splitter_cf;
     else if (IsEqualGUID(clsid, &CLSID_WAVEParser))
         factory = &wave_parser_cf;
-    else if (IsEqualGUID(clsid, &CLSID_WMADecMediaObject))
+    else if (IsEqualGUID(clsid, &CLSID_wg_wma_decoder))
         factory = &wma_decoder_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_wmv_decoder))
         factory = &wmv_decoder_cf;
@@ -1531,18 +1531,7 @@ HRESULT WINAPI DllRegisterServer(void)
         {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_PCM},
         {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_IEEE_FLOAT},
     };
-    DMO_PARTIAL_MEDIATYPE wma_decoder_output[2] =
-    {
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_PCM},
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_IEEE_FLOAT},
-    };
-    DMO_PARTIAL_MEDIATYPE wma_decoder_input[4] =
-    {
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_MSAUDIO1},
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_WMAUDIO2},
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_WMAUDIO3},
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_WMAUDIO_LOSSLESS},
-    };
+    
     DMO_PARTIAL_MEDIATYPE color_convert_input[20] =
     {
         {.type = MEDIATYPE_Video, .subtype = MEDIASUBTYPE_YV12},
@@ -1613,9 +1602,6 @@ HRESULT WINAPI DllRegisterServer(void)
 
     IFilterMapper2_Release(mapper);
 
-    if (FAILED(hr = DMORegister(L"WMAudio Decoder DMO", &CLSID_WMADecMediaObject, &DMOCATEGORY_AUDIO_DECODER,
-            0, ARRAY_SIZE(wma_decoder_input), wma_decoder_input, ARRAY_SIZE(wma_decoder_output), wma_decoder_output)))
-        return hr;
     if (FAILED(hr = DMORegister(L"Resampler DMO", &CLSID_CResamplerMediaObject, &DMOCATEGORY_AUDIO_EFFECT,
             0, ARRAY_SIZE(audio_convert_types), audio_convert_types, ARRAY_SIZE(audio_convert_types), audio_convert_types)))
         return hr;
@@ -1653,8 +1639,6 @@ HRESULT WINAPI DllUnregisterServer(void)
     if (FAILED(hr = DMOUnregister(&CLSID_CColorConvertDMO, &DMOCATEGORY_VIDEO_EFFECT)))
         return hr;
     if (FAILED(hr = DMOUnregister(&CLSID_CResamplerMediaObject, &DMOCATEGORY_AUDIO_EFFECT)))
-        return hr;
-    if (FAILED(hr = DMOUnregister(&CLSID_WMADecMediaObject, &DMOCATEGORY_AUDIO_DECODER)))
         return hr;
 
     return S_OK;
