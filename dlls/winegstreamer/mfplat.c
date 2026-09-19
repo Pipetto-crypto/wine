@@ -132,7 +132,7 @@ static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a
 static const GUID CLSID_GStreamerByteStreamHandler2 = {0x317df619, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
 static const GUID CLSID_GStreamerAudioDecoder = {0x480b1517, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
 static const GUID CLSID_GStreamerVideoDecoder = {0x480b1518, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
-
+static const GUID CLSID_wg_h264_decoder = {0x1f1e273d, 0x12c0, 0x4b3a, {0x8e, 0x9b, 0x19, 0x33, 0xc2, 0x49, 0x8a, 0xea}};
 static const GUID CLSID_GStreamerSchemePlugin = {0x587eeb6a,0x7336,0x4ebd,{0xa4,0xf2,0x91,0xc9,0x48,0xde,0x62,0x2c}};
 
 static const struct class_object
@@ -148,7 +148,7 @@ class_objects[] =
     { &CLSID_GStreamerByteStreamHandler, &gstreamer_byte_stream_handler_create },
     { &CLSID_GStreamerByteStreamHandler2, &gstreamer_byte_stream_handler_2_create },
     { &CLSID_MSAACDecMFT, &aac_decoder_create },
-    { &CLSID_MSH264DecoderMFT, &h264_decoder_create },
+    { &CLSID_wg_h264_decoder, &h264_decoder_create },
     { &CLSID_GStreamerSchemePlugin, &gstreamer_scheme_handler_create },
 };
 
@@ -209,20 +209,6 @@ HRESULT mfplat_DllRegisterServer(void)
     {
         {MFMediaType_Audio, MFAudioFormat_PCM},
         {MFMediaType_Audio, MFAudioFormat_Float},
-    };
-
-    MFT_REGISTER_TYPE_INFO h264_decoder_input_types[] =
-    {
-        {MFMediaType_Video, MFVideoFormat_H264},
-        {MFMediaType_Video, MFVideoFormat_H264_ES},
-    };
-    MFT_REGISTER_TYPE_INFO h264_decoder_output_types[] =
-    {
-        {MFMediaType_Video, MFVideoFormat_NV12},
-        {MFMediaType_Video, MFVideoFormat_YV12},
-        {MFMediaType_Video, MFVideoFormat_IYUV},
-        {MFMediaType_Video, MFVideoFormat_I420},
-        {MFMediaType_Video, MFVideoFormat_YUY2},
     };
 
     MFT_REGISTER_TYPE_INFO video_processor_input_types[] =
@@ -383,16 +369,6 @@ HRESULT mfplat_DllRegisterServer(void)
             wma_decoder_input_types,
             ARRAY_SIZE(wma_decoder_output_types),
             wma_decoder_output_types,
-        },
-        {
-            CLSID_MSH264DecoderMFT,
-            MFT_CATEGORY_VIDEO_DECODER,
-            L"Microsoft H264 Video Decoder MFT",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(h264_decoder_input_types),
-            h264_decoder_input_types,
-            ARRAY_SIZE(h264_decoder_output_types),
-            h264_decoder_output_types,
         },
         {
             CLSID_VideoProcessorMFT,
