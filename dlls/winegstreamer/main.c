@@ -1244,7 +1244,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &mpeg_video_codec_cf;
     else if (IsEqualGUID(clsid, &CLSID_mpeg_layer3_decoder))
         factory = &mpeg_layer3_decoder_cf;
-    else if (IsEqualGUID(clsid, &CLSID_MPEG1Splitter))
+    else if (IsEqualGUID(clsid, &CLSID_wg_mpeg1_splitter))
         factory = &mpeg_splitter_cf;
     else if (IsEqualGUID(clsid, &CLSID_WAVEParser))
         factory = &wave_parser_cf;
@@ -1424,52 +1424,6 @@ static const REGFILTER2 reg_mpeg_layer3_decoder =
     .u.s2.rgPins2 = reg_mpeg_layer3_decoder_pins,
 };
 
-static const REGPINTYPES reg_mpeg_splitter_sink_mts[4] =
-{
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_MPEG1Audio},
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_MPEG1Video},
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_MPEG1System},
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_MPEG1VideoCD},
-};
-
-static const REGPINTYPES reg_mpeg_splitter_audio_mts[2] =
-{
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1Packet},
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1AudioPayload},
-};
-
-static const REGPINTYPES reg_mpeg_splitter_video_mts[2] =
-{
-    {&MEDIATYPE_Video, &MEDIASUBTYPE_MPEG1Packet},
-    {&MEDIATYPE_Video, &MEDIASUBTYPE_MPEG1Payload},
-};
-
-static const REGFILTERPINS2 reg_mpeg_splitter_pins[3] =
-{
-    {
-        .nMediaTypes = 4,
-        .lpMediaType = reg_mpeg_splitter_sink_mts,
-    },
-    {
-        .dwFlags = REG_PINFLAG_B_ZERO | REG_PINFLAG_B_OUTPUT,
-        .nMediaTypes = 2,
-        .lpMediaType = reg_mpeg_splitter_audio_mts,
-    },
-    {
-        .dwFlags = REG_PINFLAG_B_ZERO | REG_PINFLAG_B_OUTPUT,
-        .nMediaTypes = 2,
-        .lpMediaType = reg_mpeg_splitter_video_mts,
-    },
-};
-
-static const REGFILTER2 reg_mpeg_splitter =
-{
-    .dwVersion = 2,
-    .dwMerit = MERIT_NORMAL,
-    .u.s2.cPins2 = 3,
-    .u.s2.rgPins2 = reg_mpeg_splitter_pins,
-};
-
 static const REGPINTYPES reg_wave_parser_sink_mts[3] =
 {
     {&MEDIATYPE_Stream, &MEDIASUBTYPE_WAVE},
@@ -1547,8 +1501,6 @@ HRESULT WINAPI DllRegisterServer(void)
             L"MPEG Video Decoder", NULL, NULL, NULL, &reg_mpeg_video_codec);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_mpeg_layer3_decoder,
             L"MPEG Layer-3 Decoder", NULL, NULL, NULL, &reg_mpeg_layer3_decoder);
-    IFilterMapper2_RegisterFilter(mapper, &CLSID_MPEG1Splitter,
-            L"MPEG-I Stream Splitter", NULL, NULL, NULL, &reg_mpeg_splitter);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_WAVEParser, L"Wave Parser", NULL, NULL, NULL, &reg_wave_parser);
 
     IFilterMapper2_Release(mapper);
@@ -1575,7 +1527,6 @@ HRESULT WINAPI DllUnregisterServer(void)
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegAudioCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegVideoCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_mpeg_layer3_decoder);
-    IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_MPEG1Splitter);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_WAVEParser);
 
     IFilterMapper2_Release(mapper);
