@@ -126,6 +126,12 @@ coclass wg_wmv_decoder {}
 coclass wg_h264_decoder {}
 
 [
+	threading(both),
+    uuid(6c34de69-4670-46cd-8cb4-1f2fa1dffb65)
+]
+coclass wg_h264_encoder {}
+
+[
     threading(both),
     uuid(92f35e78-15a5-486b-888e-575f99651ce2)
 ]

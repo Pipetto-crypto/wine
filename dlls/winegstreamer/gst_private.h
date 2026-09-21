@@ -166,7 +166,6 @@ bool amt_to_wg_format(const AM_MEDIA_TYPE *mt, struct wg_format *format);
 BOOL init_gstreamer(void);
 
 extern HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj);
-extern HRESULT mfplat_DllRegisterServer(void);
 
 IMFMediaType *mf_media_type_from_wg_format(const struct wg_format *format);
 void mf_media_type_to_wg_format(IMFMediaType *type, struct wg_format *format);
@@ -205,6 +204,7 @@ HRESULT video_decoder_create(REFIID riid, void **ret);
 HRESULT aac_decoder_create(REFIID riid, void **ret);
 HRESULT h264_decoder_create(REFIID riid, void **ret);
 HRESULT video_processor_create(REFIID riid, void **ret);
+HRESULT h264_encoder_create(REFIID riid, void **ret);
 HRESULT gstreamer_scheme_handler_create(REFIID riid, void **ret);
 
 extern const GUID MFAudioFormat_RAW_AAC;

@@ -135,6 +135,7 @@ static const GUID CLSID_GStreamerByteStreamHandler2 = {0x317df619, 0x5e5a, 0x468
 static const GUID CLSID_GStreamerAudioDecoder = {0x480b1517, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
 static const GUID CLSID_GStreamerVideoDecoder = {0x480b1518, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
 static const GUID CLSID_wg_h264_decoder = {0x1f1e273d, 0x12c0, 0x4b3a, {0x8e, 0x9b, 0x19, 0x33, 0xc2, 0x49, 0x8a, 0xea}};
+static const GUID CLSID_wg_h264_encoder = {0x6c34de69,0x4670,0x46cd,{0x8c,0xb4,0x1f,0x2f,0xa1,0xdf,0xfb,0x65}};
 static const GUID CLSID_GStreamerSchemePlugin = {0x587eeb6a,0x7336,0x4ebd,{0xa4,0xf2,0x91,0xc9,0x48,0xde,0x62,0x2c}};
 
 static const struct class_object
@@ -151,6 +152,7 @@ class_objects[] =
     { &CLSID_GStreamerByteStreamHandler2, &gstreamer_byte_stream_handler_2_create },
     { &CLSID_wg_aac_decoder, &aac_decoder_create },
     { &CLSID_wg_h264_decoder, &h264_decoder_create },
+    { &CLSID_wg_h264_encoder, &h264_encoder_create },
     { &CLSID_GStreamerSchemePlugin, &gstreamer_scheme_handler_create },
 };
 
@@ -178,94 +180,6 @@ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
     }
 
     return CLASS_E_CLASSNOTAVAILABLE;
-}
-
-HRESULT mfplat_DllRegisterServer(void)
-{
-    MFT_REGISTER_TYPE_INFO audio_decoder_input_types[] =
-    {
-        {MFMediaType_Audio, MFAudioFormat_GStreamer},
-        {MFMediaType_Audio, MFAudioFormat_MP3},
-    };
-    MFT_REGISTER_TYPE_INFO audio_decoder_output_types[] =
-    {
-        {MFMediaType_Audio, MFAudioFormat_Float},
-        {MFMediaType_Audio, MFAudioFormat_PCM},
-    };
-
-    MFT_REGISTER_TYPE_INFO video_decoder_input_types[] =
-    {
-        {MFMediaType_Video, MFVideoFormat_GStreamer},
-        {MFMediaType_Video, MFVideoFormat_IV50},
-    };
-    MFT_REGISTER_TYPE_INFO video_decoder_output_types[] =
-    {
-        {MFMediaType_Video, MFVideoFormat_NV12},
-        {MFMediaType_Video, MFVideoFormat_YV12},
-        {MFMediaType_Video, MFVideoFormat_IYUV},
-        {MFMediaType_Video, MFVideoFormat_I420},
-        {MFMediaType_Video, MFVideoFormat_YUY2},
-        {MFMediaType_Video, MFVideoFormat_NV11},
-        {MFMediaType_Video, MFVideoFormat_UYVY},
-        {MFMediaType_Video, MFVideoFormat_YVYU},
-        {MFMediaType_Video, DMOVideoFormat_RGB32},
-        {MFMediaType_Video, DMOVideoFormat_RGB24},
-        {MFMediaType_Video, DMOVideoFormat_RGB565},
-        {MFMediaType_Video, DMOVideoFormat_RGB555},
-        {MFMediaType_Video, DMOVideoFormat_RGB8},
-    };
-
-    struct mft
-    {
-        GUID clsid;
-        GUID category;
-        WCHAR name[MAX_PATH];
-        UINT32 flags;
-        UINT32 input_types_count;
-        MFT_REGISTER_TYPE_INFO *input_types;
-        UINT32 output_types_count;
-        MFT_REGISTER_TYPE_INFO *output_types;
-    }
-    mfts[] =
-    {
-        {
-            CLSID_GStreamerAudioDecoder,
-            MFT_CATEGORY_AUDIO_DECODER,
-            L"Wine Audio Decoder MFT",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(audio_decoder_input_types),
-            audio_decoder_input_types,
-            ARRAY_SIZE(audio_decoder_output_types),
-            audio_decoder_output_types,
-        },
-        {
-            CLSID_GStreamerVideoDecoder,
-            MFT_CATEGORY_VIDEO_DECODER,
-            L"Wine Video Decoder MFT",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(video_decoder_input_types),
-            video_decoder_input_types,
-            ARRAY_SIZE(video_decoder_output_types),
-            video_decoder_output_types,
-        },
-    };
-
-    unsigned int i;
-    HRESULT hr;
-
-    for (i = 0; i < ARRAY_SIZE(mfts); i++)
-    {
-        hr = MFTRegister(mfts[i].clsid, mfts[i].category, mfts[i].name, mfts[i].flags, mfts[i].input_types_count,
-                    mfts[i].input_types, mfts[i].output_types_count, mfts[i].output_types, NULL);
-
-        if (FAILED(hr))
-        {
-            FIXME("Failed to register MFT, hr %#lx.\n", hr);
-            return hr;
-        }
-    }
-
-    return S_OK;
 }
 
 static const struct
