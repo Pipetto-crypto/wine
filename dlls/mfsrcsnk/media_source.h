@@ -20,6 +20,7 @@
 
 #include "wine/debug.h"
 
+extern IClassFactory asf_byte_stream_plugin_factory;
 extern IClassFactory avi_byte_stream_plugin_factory;
 extern IClassFactory mpeg4_byte_stream_plugin_factory;
 extern IClassFactory wav_byte_stream_plugin_factory;
