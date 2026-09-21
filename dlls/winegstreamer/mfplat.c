@@ -129,6 +129,7 @@ static const IClassFactoryVtbl class_factory_vtbl =
 };
 
 static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
+static const GUID CLSID_wg_video_processor = {0xd527607f,0x89cb,0x4e94,{0x95,0x71,0xbc,0xfe,0x62,0x17,0x56,0x13}};
 static const GUID CLSID_GStreamerByteStreamHandler2 = {0x317df619, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
 static const GUID CLSID_GStreamerAudioDecoder = {0x480b1517, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
 static const GUID CLSID_GStreamerVideoDecoder = {0x480b1518, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
@@ -144,7 +145,7 @@ class_objects[] =
 {
     { &CLSID_GStreamerAudioDecoder, &audio_decoder_create },
     { &CLSID_GStreamerVideoDecoder, &video_decoder_create },
-    { &CLSID_VideoProcessorMFT, &video_processor_create },
+    { &CLSID_wg_video_processor, &video_processor_create },
     { &CLSID_GStreamerByteStreamHandler, &gstreamer_byte_stream_handler_create },
     { &CLSID_GStreamerByteStreamHandler2, &gstreamer_byte_stream_handler_2_create },
     { &CLSID_MSAACDecMFT, &aac_decoder_create },
@@ -196,56 +197,6 @@ HRESULT mfplat_DllRegisterServer(void)
     {
         {MFMediaType_Audio, MFAudioFormat_Float},
         {MFMediaType_Audio, MFAudioFormat_PCM},
-    };
-
-    MFT_REGISTER_TYPE_INFO video_processor_input_types[] =
-    {
-        {MFMediaType_Video, MFVideoFormat_IYUV},
-        {MFMediaType_Video, MFVideoFormat_YV12},
-        {MFMediaType_Video, MFVideoFormat_NV12},
-        {MFMediaType_Video, MFVideoFormat_YUY2},
-        {MFMediaType_Video, MFVideoFormat_ARGB32},
-        {MFMediaType_Video, MFVideoFormat_RGB32},
-        {MFMediaType_Video, MFVideoFormat_NV11},
-        {MFMediaType_Video, MFVideoFormat_AYUV},
-        {MFMediaType_Video, MFVideoFormat_UYVY},
-        {MFMediaType_Video, MEDIASUBTYPE_P208},
-        {MFMediaType_Video, MFVideoFormat_RGB24},
-        {MFMediaType_Video, MFVideoFormat_RGB555},
-        {MFMediaType_Video, MFVideoFormat_RGB565},
-        {MFMediaType_Video, MFVideoFormat_RGB8},
-        {MFMediaType_Video, MFVideoFormat_I420},
-        {MFMediaType_Video, MFVideoFormat_Y216},
-        {MFMediaType_Video, MFVideoFormat_v410},
-        {MFMediaType_Video, MFVideoFormat_Y41P},
-        {MFMediaType_Video, MFVideoFormat_Y41T},
-        {MFMediaType_Video, MFVideoFormat_Y42T},
-        {MFMediaType_Video, MFVideoFormat_YVYU},
-        {MFMediaType_Video, MFVideoFormat_420O},
-    };
-    MFT_REGISTER_TYPE_INFO video_processor_output_types[] =
-    {
-        {MFMediaType_Video, MFVideoFormat_IYUV},
-        {MFMediaType_Video, MFVideoFormat_YV12},
-        {MFMediaType_Video, MFVideoFormat_NV12},
-        {MFMediaType_Video, MFVideoFormat_YUY2},
-        {MFMediaType_Video, MFVideoFormat_ARGB32},
-        {MFMediaType_Video, MFVideoFormat_RGB32},
-        {MFMediaType_Video, MFVideoFormat_NV11},
-        {MFMediaType_Video, MFVideoFormat_AYUV},
-        {MFMediaType_Video, MFVideoFormat_UYVY},
-        {MFMediaType_Video, MEDIASUBTYPE_P208},
-        {MFMediaType_Video, MFVideoFormat_RGB24},
-        {MFMediaType_Video, MFVideoFormat_RGB555},
-        {MFMediaType_Video, MFVideoFormat_RGB565},
-        {MFMediaType_Video, MFVideoFormat_RGB8},
-        {MFMediaType_Video, MFVideoFormat_I420},
-        {MFMediaType_Video, MFVideoFormat_Y216},
-        {MFMediaType_Video, MFVideoFormat_v410},
-        {MFMediaType_Video, MFVideoFormat_Y41P},
-        {MFMediaType_Video, MFVideoFormat_Y41T},
-        {MFMediaType_Video, MFVideoFormat_Y42T},
-        {MFMediaType_Video, MFVideoFormat_YVYU},
     };
 
     MFT_REGISTER_TYPE_INFO audio_decoder_input_types[] =
@@ -305,16 +256,6 @@ HRESULT mfplat_DllRegisterServer(void)
             aac_decoder_output_types,
         },
         {
-            CLSID_VideoProcessorMFT,
-            MFT_CATEGORY_VIDEO_PROCESSOR,
-            L"Microsoft Video Processor MFT",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(video_processor_input_types),
-            video_processor_input_types,
-            ARRAY_SIZE(video_processor_output_types),
-            video_processor_output_types,
-        },
-        {
             CLSID_CResamplerMediaObject,
             MFT_CATEGORY_AUDIO_EFFECT,
             L"Resampler MFT",
@@ -323,19 +264,6 @@ HRESULT mfplat_DllRegisterServer(void)
             resampler_types,
             ARRAY_SIZE(resampler_types),
             resampler_types,
-        },
-        {
-            /* HACK: Register the video processor as a decoder too as
-             * the media source currently always decodes.
-             */
-            CLSID_VideoProcessorMFT,
-            MFT_CATEGORY_VIDEO_DECODER,
-            L"Null Decoder",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(video_processor_input_types),
-            video_processor_input_types,
-            ARRAY_SIZE(video_processor_output_types),
-            video_processor_output_types,
         },
         {
             CLSID_GStreamerAudioDecoder,
