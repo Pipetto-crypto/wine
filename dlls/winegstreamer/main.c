@@ -1256,9 +1256,9 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &resampler_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_color_converter))
         factory = &color_convert_cf;
-    else if (IsEqualGUID(clsid, &CLSID_MFMP3SinkClassFactory))
+    else if (IsEqualGUID(clsid, &CLSID_wg_mp3_sink_factory))
         factory = &mp3_sink_class_factory_cf;
-    else if (IsEqualGUID(clsid, &CLSID_MFMPEG4SinkClassFactory))
+    else if (IsEqualGUID(clsid, &CLSID_wg_mpeg4_sink_factory))
         factory = &mpeg4_sink_class_factory_cf;
     else
     {
