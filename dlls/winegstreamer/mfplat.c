@@ -130,6 +130,7 @@ static const IClassFactoryVtbl class_factory_vtbl =
 
 static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
 static const GUID CLSID_wg_video_processor = {0xd527607f,0x89cb,0x4e94,{0x95,0x71,0xbc,0xfe,0x62,0x17,0x56,0x13}};
+static const GUID CLSID_wg_aac_decoder = {0xe7889a8a,0x2083,0x4844,{0x83,0x70,0x5e,0xe3,0x49,0xb1,0x45,0x03}};
 static const GUID CLSID_GStreamerByteStreamHandler2 = {0x317df619, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
 static const GUID CLSID_GStreamerAudioDecoder = {0x480b1517, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
 static const GUID CLSID_GStreamerVideoDecoder = {0x480b1518, 0xc8e9, 0x4eae, {0xb0, 0x06, 0xe6, 0x30, 0x07, 0x18, 0xd8, 0x5d}};
@@ -148,7 +149,7 @@ class_objects[] =
     { &CLSID_wg_video_processor, &video_processor_create },
     { &CLSID_GStreamerByteStreamHandler, &gstreamer_byte_stream_handler_create },
     { &CLSID_GStreamerByteStreamHandler2, &gstreamer_byte_stream_handler_2_create },
-    { &CLSID_MSAACDecMFT, &aac_decoder_create },
+    { &CLSID_wg_aac_decoder, &aac_decoder_create },
     { &CLSID_wg_h264_decoder, &h264_decoder_create },
     { &CLSID_GStreamerSchemePlugin, &gstreamer_scheme_handler_create },
 };
@@ -181,18 +182,6 @@ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
 
 HRESULT mfplat_DllRegisterServer(void)
 {
-    MFT_REGISTER_TYPE_INFO aac_decoder_input_types[] =
-    {
-        {MFMediaType_Audio, MFAudioFormat_AAC},
-        {MFMediaType_Audio, MFAudioFormat_RAW_AAC},
-        {MFMediaType_Audio, MFAudioFormat_ADTS},
-    };
-    MFT_REGISTER_TYPE_INFO aac_decoder_output_types[] =
-    {
-        {MFMediaType_Audio, MFAudioFormat_Float},
-        {MFMediaType_Audio, MFAudioFormat_PCM},
-    };
-
     MFT_REGISTER_TYPE_INFO audio_decoder_input_types[] =
     {
         {MFMediaType_Audio, MFAudioFormat_GStreamer},
@@ -239,16 +228,6 @@ HRESULT mfplat_DllRegisterServer(void)
     }
     mfts[] =
     {
-        {
-            CLSID_MSAACDecMFT,
-            MFT_CATEGORY_AUDIO_DECODER,
-            L"Microsoft AAC Audio Decoder MFT",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(aac_decoder_input_types),
-            aac_decoder_input_types,
-            ARRAY_SIZE(aac_decoder_output_types),
-            aac_decoder_output_types,
-        },
         {
             CLSID_GStreamerAudioDecoder,
             MFT_CATEGORY_AUDIO_DECODER,
