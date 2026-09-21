@@ -1252,7 +1252,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &wma_decoder_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_wmv_decoder))
         factory = &wmv_decoder_cf;
-    else if (IsEqualGUID(clsid, &CLSID_CResamplerMediaObject))
+    else if (IsEqualGUID(clsid, &CLSID_wg_resampler))
         factory = &resampler_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_color_converter))
         factory = &color_convert_cf;
@@ -1526,12 +1526,6 @@ static const REGFILTER2 reg_decodebin_parser =
 
 HRESULT WINAPI DllRegisterServer(void)
 {
-    DMO_PARTIAL_MEDIATYPE audio_convert_types[2] =
-    {
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_PCM},
-        {.type = MEDIATYPE_Audio, .subtype = MEDIASUBTYPE_IEEE_FLOAT},
-    };
-
     IFilterMapper2 *mapper;
     HRESULT hr;
 
@@ -1559,10 +1553,6 @@ HRESULT WINAPI DllRegisterServer(void)
 
     IFilterMapper2_Release(mapper);
 
-    if (FAILED(hr = DMORegister(L"Resampler DMO", &CLSID_CResamplerMediaObject, &DMOCATEGORY_AUDIO_EFFECT,
-            0, ARRAY_SIZE(audio_convert_types), audio_convert_types, ARRAY_SIZE(audio_convert_types), audio_convert_types)))
-        return hr;
-
     return mfplat_DllRegisterServer();
 }
 
@@ -1589,9 +1579,6 @@ HRESULT WINAPI DllUnregisterServer(void)
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_WAVEParser);
 
     IFilterMapper2_Release(mapper);
-
-    if (FAILED(hr = DMOUnregister(&CLSID_CResamplerMediaObject, &DMOCATEGORY_AUDIO_EFFECT)))
-        return hr;
 
     return S_OK;
 }
