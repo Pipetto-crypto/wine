@@ -181,12 +181,6 @@ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
 
 HRESULT mfplat_DllRegisterServer(void)
 {
-    MFT_REGISTER_TYPE_INFO resampler_types[] =
-    {
-        {MFMediaType_Audio, MFAudioFormat_PCM},
-        {MFMediaType_Audio, MFAudioFormat_Float},
-    };
-
     MFT_REGISTER_TYPE_INFO aac_decoder_input_types[] =
     {
         {MFMediaType_Audio, MFAudioFormat_AAC},
@@ -254,16 +248,6 @@ HRESULT mfplat_DllRegisterServer(void)
             aac_decoder_input_types,
             ARRAY_SIZE(aac_decoder_output_types),
             aac_decoder_output_types,
-        },
-        {
-            CLSID_CResamplerMediaObject,
-            MFT_CATEGORY_AUDIO_EFFECT,
-            L"Resampler MFT",
-            MFT_ENUM_FLAG_SYNCMFT,
-            ARRAY_SIZE(resampler_types),
-            resampler_types,
-            ARRAY_SIZE(resampler_types),
-            resampler_types,
         },
         {
             CLSID_GStreamerAudioDecoder,
