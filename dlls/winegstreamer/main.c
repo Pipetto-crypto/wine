@@ -1246,7 +1246,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &mpeg_layer3_decoder_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_mpeg1_splitter))
         factory = &mpeg_splitter_cf;
-    else if (IsEqualGUID(clsid, &CLSID_WAVEParser))
+    else if (IsEqualGUID(clsid, &CLSID_wg_wave_parser))
         factory = &wave_parser_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_wma_decoder))
         factory = &wma_decoder_cf;
@@ -1401,34 +1401,6 @@ static const REGFILTER2 reg_mpeg_layer3_decoder =
     .u.s2.rgPins2 = reg_mpeg_layer3_decoder_pins,
 };
 
-static const REGPINTYPES reg_wave_parser_sink_mts[3] =
-{
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_WAVE},
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_AU},
-    {&MEDIATYPE_Stream, &MEDIASUBTYPE_AIFF},
-};
-
-static const REGFILTERPINS2 reg_wave_parser_pins[2] =
-{
-    {
-        .nMediaTypes = 3,
-        .lpMediaType = reg_wave_parser_sink_mts,
-    },
-    {
-        .dwFlags = REG_PINFLAG_B_OUTPUT,
-        .nMediaTypes = 1,
-        .lpMediaType = &reg_audio_mt,
-    },
-};
-
-static const REGFILTER2 reg_wave_parser =
-{
-    .dwVersion = 2,
-    .dwMerit = MERIT_UNLIKELY,
-    .u.s2.cPins2 = 2,
-    .u.s2.rgPins2 = reg_wave_parser_pins,
-};
-
 static const REGFILTERPINS2 reg_decodebin_parser_pins[3] =
 {
     {
@@ -1477,7 +1449,6 @@ HRESULT WINAPI DllRegisterServer(void)
             L"MPEG Video Decoder", NULL, NULL, NULL, &reg_mpeg_video_codec);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_mpeg_layer3_decoder,
             L"MPEG Layer-3 Decoder", NULL, NULL, NULL, &reg_mpeg_layer3_decoder);
-    IFilterMapper2_RegisterFilter(mapper, &CLSID_WAVEParser, L"Wave Parser", NULL, NULL, NULL, &reg_wave_parser);
 
     IFilterMapper2_Release(mapper);
 
@@ -1502,7 +1473,6 @@ HRESULT WINAPI DllUnregisterServer(void)
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegAudioCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegVideoCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_mpeg_layer3_decoder);
-    IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_WAVEParser);
 
     IFilterMapper2_Release(mapper);
 
