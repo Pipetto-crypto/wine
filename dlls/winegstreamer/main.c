@@ -1238,7 +1238,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &avi_splitter_cf;
     else if (IsEqualGUID(clsid, &CLSID_decodebin_parser))
         factory = &decodebin_parser_cf;
-    else if (IsEqualGUID(clsid, &CLSID_CMpegAudioCodec))
+    else if (IsEqualGUID(clsid, &CLSID_wg_mpeg_audio_decoder))
         factory = &mpeg_audio_codec_cf;
     else if (IsEqualGUID(clsid, &CLSID_CMpegVideoCodec))
         factory = &mpeg_video_codec_cf;
@@ -1304,39 +1304,6 @@ BOOL init_gstreamer(void)
 static const REGPINTYPES reg_audio_mt = {&MEDIATYPE_Audio, &GUID_NULL};
 static const REGPINTYPES reg_stream_mt = {&MEDIATYPE_Stream, &GUID_NULL};
 static const REGPINTYPES reg_video_mt = {&MEDIATYPE_Video, &GUID_NULL};
-
-static const REGPINTYPES reg_mpeg_audio_codec_sink_mts[3] =
-{
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1Packet},
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1Payload},
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MPEG1AudioPayload},
-};
-
-static const REGPINTYPES reg_mpeg_audio_codec_source_mts[1] =
-{
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_PCM},
-};
-
-static const REGFILTERPINS2 reg_mpeg_audio_codec_pins[2] =
-{
-    {
-        .nMediaTypes = 3,
-        .lpMediaType = reg_mpeg_audio_codec_sink_mts,
-    },
-    {
-        .dwFlags = REG_PINFLAG_B_OUTPUT,
-        .nMediaTypes = 1,
-        .lpMediaType = reg_mpeg_audio_codec_source_mts,
-    },
-};
-
-static const REGFILTER2 reg_mpeg_audio_codec =
-{
-    .dwVersion = 2,
-    .dwMerit = 0x03680001,
-    .u.s2.cPins2 = 2,
-    .u.s2.rgPins2 = reg_mpeg_audio_codec_pins,
-};
 
 static const REGPINTYPES reg_mpeg_video_codec_sink_mts[2] =
 {
@@ -1443,8 +1410,6 @@ HRESULT WINAPI DllRegisterServer(void)
 
     IFilterMapper2_RegisterFilter(mapper, &CLSID_decodebin_parser,
             L"GStreamer splitter filter", NULL, NULL, NULL, &reg_decodebin_parser);
-    IFilterMapper2_RegisterFilter(mapper, &CLSID_CMpegAudioCodec,
-            L"MPEG Audio Decoder", NULL, NULL, NULL, &reg_mpeg_audio_codec);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_CMpegVideoCodec,
             L"MPEG Video Decoder", NULL, NULL, NULL, &reg_mpeg_video_codec);
     IFilterMapper2_RegisterFilter(mapper, &CLSID_mpeg_layer3_decoder,
@@ -1470,7 +1435,6 @@ HRESULT WINAPI DllUnregisterServer(void)
         return hr;
 
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_decodebin_parser);
-    IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegAudioCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_CMpegVideoCodec);
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_mpeg_layer3_decoder);
 
