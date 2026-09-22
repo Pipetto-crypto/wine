@@ -473,7 +473,7 @@ static HRESULT WINAPI byte_stream_handler_QueryInterface(IMFByteStreamHandler *i
 
     WARN("Unsupported %s\n", debugstr_guid(riid));
     *out = NULL;
-    return E_NOTIMPL;
+    return E_NOINTERFACE;
 }
 
 static ULONG WINAPI byte_stream_handler_AddRef(IMFByteStreamHandler *iface)
