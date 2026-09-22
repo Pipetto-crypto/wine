@@ -41,8 +41,6 @@ WINE_DECLARE_DEBUG_CHANNEL(wmvcore);
 DEFINE_GUID(GUID_NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 DEFINE_GUID(MEDIASUBTYPE_VC1S,MAKEFOURCC('V','C','1','S'),0x0000,0x0010,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71);
 
-static const GUID MEDIASUBTYPE_MP3 = {0x00000055, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
-
 bool array_reserve(void **elements, size_t *capacity, size_t count, size_t size)
 {
     unsigned int new_capacity, max_capacity;
@@ -1242,7 +1240,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &mpeg_audio_codec_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_mpeg_video_decoder))
         factory = &mpeg_video_codec_cf;
-    else if (IsEqualGUID(clsid, &CLSID_mpeg_layer3_decoder))
+    else if (IsEqualGUID(clsid, &CLSID_wg_mp3_decoder))
         factory = &mpeg_layer3_decoder_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_mpeg1_splitter))
         factory = &mpeg_splitter_cf;
@@ -1305,37 +1303,6 @@ static const REGPINTYPES reg_audio_mt = {&MEDIATYPE_Audio, &GUID_NULL};
 static const REGPINTYPES reg_stream_mt = {&MEDIATYPE_Stream, &GUID_NULL};
 static const REGPINTYPES reg_video_mt = {&MEDIATYPE_Video, &GUID_NULL};
 
-static const REGPINTYPES reg_mpeg_layer3_decoder_sink_mts[1] =
-{
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_MP3},
-};
-
-static const REGPINTYPES reg_mpeg_layer3_decoder_source_mts[1] =
-{
-    {&MEDIATYPE_Audio, &MEDIASUBTYPE_PCM},
-};
-
-static const REGFILTERPINS2 reg_mpeg_layer3_decoder_pins[2] =
-{
-    {
-        .nMediaTypes = 1,
-        .lpMediaType = reg_mpeg_layer3_decoder_sink_mts,
-    },
-    {
-        .dwFlags = REG_PINFLAG_B_OUTPUT,
-        .nMediaTypes = 1,
-        .lpMediaType = reg_mpeg_layer3_decoder_source_mts,
-    },
-};
-
-static const REGFILTER2 reg_mpeg_layer3_decoder =
-{
-    .dwVersion = 2,
-    .dwMerit = 0x00810000,
-    .u.s2.cPins2 = 2,
-    .u.s2.rgPins2 = reg_mpeg_layer3_decoder_pins,
-};
-
 static const REGFILTERPINS2 reg_decodebin_parser_pins[3] =
 {
     {
@@ -1378,8 +1345,6 @@ HRESULT WINAPI DllRegisterServer(void)
 
     IFilterMapper2_RegisterFilter(mapper, &CLSID_decodebin_parser,
             L"GStreamer splitter filter", NULL, NULL, NULL, &reg_decodebin_parser);
-    IFilterMapper2_RegisterFilter(mapper, &CLSID_mpeg_layer3_decoder,
-            L"MPEG Layer-3 Decoder", NULL, NULL, NULL, &reg_mpeg_layer3_decoder);
 
     IFilterMapper2_Release(mapper);
 
@@ -1401,7 +1366,6 @@ HRESULT WINAPI DllUnregisterServer(void)
         return hr;
 
     IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_decodebin_parser);
-    IFilterMapper2_UnregisterFilter(mapper, NULL, NULL, &CLSID_mpeg_layer3_decoder);
 
     IFilterMapper2_Release(mapper);
 
