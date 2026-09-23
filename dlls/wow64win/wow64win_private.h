@@ -22,6 +22,7 @@
 #define __WOW64WIN_PRIVATE_H
 
 #include "../win32u/win32syscalls.h"
+#include "ntuser.h"
 
 #define SYSCALL_ENTRY(id,name,_args) extern NTSTATUS WINAPI wow64_ ## name( UINT *args );
 ALL_SYSCALLS32

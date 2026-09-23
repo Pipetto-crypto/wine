@@ -34,10 +34,14 @@
 # endif
 #endif
 
+typedef NTSTATUS (WINAPI *ntuser_callback)( void *args, ULONG len );
+NTSYSAPI NTSTATUS KeUserModeCallback( ULONG id, const void *args, ULONG len, void **ret_ptr, ULONG *ret_len );
+
 /* KernelCallbackTable codes, not compatible with Windows */
 enum
 {
     /* user32 callbacks */
+    NtUserCallDispatchCallback,
     NtUserCallEnumDisplayMonitor,
     NtUserCallSendAsyncCallback,
     NtUserCallWinEventHook,
@@ -70,6 +74,19 @@ enum
     NtUserDriverCallbackLast = NtUserDriverCallbackFirst + 9,
     NtUserCallCount
 };
+
+/* NtUserCallDispatchCallback params */
+struct dispatch_callback_params
+{
+    UINT64 callback;
+};
+
+static inline NTSTATUS KeUserDispatchCallback( const struct dispatch_callback_params *params, ULONG len,
+                                               void **ret_ptr, ULONG *ret_len )
+{
+    if (!params->callback) return STATUS_ENTRYPOINT_NOT_FOUND;
+    return KeUserModeCallback( NtUserCallDispatchCallback, params, len, ret_ptr, ret_len );
+}
 
 /* TEB thread info, not compatible with Windows */
 struct ntuser_thread_info
