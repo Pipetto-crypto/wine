@@ -1755,3 +1755,9 @@ HRESULT WINAPI MFCreateMediaBufferFromMediaType(IMFMediaType *media_type, LONGLO
     alignment = max(16, alignment);
     return create_1d_buffer(min_length, alignment - 1, buffer);
 }
+
+HRESULT WINAPI MFCreateLegacyMediaBufferOnMFMediaBuffer(IMFSample *sample, IMFMediaBuffer *media_buffer, DWORD offset, IMediaBuffer **obj)
+{
+    FIXME("stub!\n");
+    return E_NOTIMPL;
+}
