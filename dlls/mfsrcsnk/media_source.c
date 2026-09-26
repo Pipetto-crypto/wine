@@ -1894,12 +1894,20 @@ static BOOL use_gst_byte_stream_handler(void)
     BOOL result;
     DWORD size = sizeof(result);
 
-    /* @@ Wine registry key: HKCU\Software\Wine\MediaFoundation */
-    if (!RegGetValueW( HKEY_CURRENT_USER, L"Software\\Wine\\MediaFoundation", L"DisableGstByteStreamHandler",
-                       RRF_RT_REG_DWORD, NULL, &result, &size ))
-        return !result;
+    const char *wine_use_dmo = getenv("WINE_USE_DMO");
 
-    return TRUE;
+	if (!wine_use_dmo) {
+    	/* @@ Wine registry key: HKCU\Software\Wine\MediaFoundation */
+    	if (!RegGetValueW( HKEY_CURRENT_USER, L"Software\\Wine\\MediaFoundation", L"DisableGstByteStreamHandler",
+                       	RRF_RT_REG_DWORD, NULL, &result, &size ))
+        	return !result;
+
+    	return TRUE;
+    }
+    else {
+    	result = wine_use_dmo && atoi(wine_use_dmo);
+    	return !result;
+    }
 }
 
 static HRESULT WINAPI asf_byte_stream_plugin_factory_CreateInstance(IClassFactory *iface,
