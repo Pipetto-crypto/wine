@@ -108,7 +108,6 @@ BOOL WINAPI DllMain( HINSTANCE instance, DWORD reason, void *reserved )
         DisableThreadLibraryCalls( instance );
     
         status = __wine_init_unix_call();
-        if (!status) status = UNIX_CALL( process_attach, NULL );
         if (!status) status = UNIX_CALL( process_attach, &params );
         if (status) WARN( "Failed to init unixlib, status %#lx\n", status );
     }
