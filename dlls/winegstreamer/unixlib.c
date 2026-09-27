@@ -330,11 +330,8 @@ NTSTATUS wg_init_gstreamer(void *arg)
 	if (wine_gst_no_gl == -1)
 		wine_gst_no_gl = getenv("WINE_GST_NO_GL") && atoi(getenv("WINE_GST_NO_GL"));
 
-	if (wine_gst_no_gl) {
-		if (!media_converter_init())
-			return STATUS_UNSUCCESSFUL;
+	if (wine_gst_no_gl)
 		return STATUS_SUCCESS;
-	}
 	
     if (!(gl_display = gst_gl_display_new()))
         GST_ERROR("Failed to create OpenGL display");
@@ -356,13 +353,6 @@ NTSTATUS wg_init_gstreamer(void *arg)
             gst_object_unref(gl_display);
             gl_display = NULL;
         }
-    }
-
-    if (!media_converter_init())
-    {
-        GST_ERROR("Failed to init media converter.");
-        gst_object_unref(gl_display);
-        return STATUS_UNSUCCESSFUL;
     }
 
     return STATUS_SUCCESS;
