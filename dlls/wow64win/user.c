@@ -1450,6 +1450,11 @@ static NTSTATUS WINAPI wow64_NtUserCallFreeIcon( void *arg, ULONG size )
     return dispatch_callback( NtUserCallFreeIcon, arg, size );
 }
 
+static NTSTATUS WINAPI wow64_NtUserCallDispatchCallback( void *arg, ULONG size )
+{
+    return dispatch_callback( NtUserCallDispatchCallback, arg, size );
+}
+
 static NTSTATUS WINAPI wow64_NtUserThunkLock( void *arg, ULONG size )
 {
     return dispatch_callback( NtUserThunkLock, arg, size );
@@ -1526,6 +1531,7 @@ static NTSTATUS WINAPI wow64_NtUserDriverCallbackFirst9( void *arg, ULONG size )
 user_callback user_callbacks[] =
 {
     /* user32 callbacks */
+    wow64_NtUserCallDispatchCallback,
     wow64_NtUserCallEnumDisplayMonitor,
     wow64_NtUserCallSendAsyncCallback,
     wow64_NtUserCallWinEventHook,
