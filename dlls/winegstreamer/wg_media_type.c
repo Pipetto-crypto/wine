@@ -306,15 +306,20 @@ static void init_caps_from_video_h264(GstCaps *caps, const MFVIDEOFORMAT *format
 {
     gst_structure_remove_field(gst_caps_get_structure(caps, 0), "format");
     gst_structure_set_name(gst_caps_get_structure(caps, 0), "video/x-h264");
+    gst_caps_set_simple(caps, "alignment", G_TYPE_STRING, "au", NULL);
+    
     if (format_size - sizeof(*format) >= sizeof(UINT32) && *(UINT32 *)(format + 1) == 0x01000000)
     {
         init_caps_codec_data_name(caps, format + 1, format_size - sizeof(*format), "streamheader");
         gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "byte-stream", NULL);
     }
-    else
+    else if (format_size > sizeof(*format))
     {
-        init_caps_codec_data_name(caps, format + 1, format_size - sizeof(*format), "codec_data");
+    	init_caps_codec_data_name(caps, format + 1, format_size - sizeof(*format), "codec_data");
         gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, format_size - sizeof(*format) ? "avc" : "byte-stream", NULL);
+    }
+    else {
+        gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "byte-stream", NULL);
     }
 }
 
