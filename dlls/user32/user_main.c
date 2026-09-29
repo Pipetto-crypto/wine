@@ -136,6 +136,17 @@ static BOOL path_contains( const WCHAR *path, const WCHAR *needle )
     return FALSE;
 }
 
+static BOOL dir_contains( const WCHAR *image, const WCHAR *name, const WCHAR *entry )
+{
+    WCHAR path[MAX_PATH];
+    size_t len = name - image;
+
+    if (len + wcslen( entry ) >= ARRAY_SIZE(path)) return FALSE;
+    memcpy( path, image, len * sizeof(WCHAR) );
+    wcscpy( path + len, entry );
+    return GetFileAttributesW( path ) != INVALID_FILE_ATTRIBUTES;
+}
+
 static BOOL use_x11_launcher_driver( const WCHAR *image, const WCHAR *name )
 {
     WCHAR custom[MAX_PATH];
@@ -173,6 +184,17 @@ static BOOL use_x11_launcher_driver( const WCHAR *image, const WCHAR *name )
     if (path_contains( image, L"\\Electronic Arts\\EA Desktop\\" ) ||
         path_contains( image, L"\\Program Files (x86)\\Origin\\" ) ||
         path_contains( image, L"\\Program Files\\Origin\\" ))
+        return TRUE;
+
+    if (!wcsicmp( name, L"nikke_launcher.exe" ) ||
+        !wcsicmp( name, L"tbs_browser.exe" ) ||
+        !wcsicmp( name, L"INTLWebViewHelper.exe" ) ||
+        !wcsicmp( name, L"msedgewebview2.exe" ))
+        return TRUE;
+
+    /* kuro launchers */
+    if (!wcsicmp( name, L"launcher_main.exe" ) &&
+        dir_contains( image, name, L"WebView2Loader.dll" ))
         return TRUE;
 
     return FALSE;
