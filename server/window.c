@@ -1244,12 +1244,13 @@ static struct region *clip_children( struct window *parent, struct window *last,
 
 
 /* set the region to the client rect clipped by the window rect, in parent-relative coordinates */
-static void set_region_client_rect( struct region *region, struct window *win )
+static void set_region_client_rect( struct region *region, struct window *win, struct process *process )
 {
     struct rectangle rect;
 
     intersect_rect( &rect, &win->window_rect, &win->client_rect );
-    intersect_rect( &rect, &rect, &win->surface_rect );
+    if (!(win->paint_flags & PAINT_HAS_LAYERED_SURFACE) || !win->thread || win->thread->process == process)
+        intersect_rect( &rect, &rect, &win->surface_rect );
     set_region_rect( region, &rect );
 }
 
@@ -1276,6 +1277,7 @@ static inline struct window *get_top_clipping_window( struct window *win )
 /* compute the visible region of a window, in window coordinates */
 static struct region *get_visible_region( struct window *win, unsigned int flags )
 {
+    struct process *process = win->thread ? win->thread->process : NULL;
     struct region *tmp = NULL, *region;
     int offset_x, offset_y;
 
@@ -1295,7 +1297,7 @@ static struct region *get_visible_region( struct window *win, unsigned int flags
 
     if ((flags & DCX_PARENTCLIP) && !is_desktop_window( win->parent ))
     {
-        set_region_client_rect( region, win->parent );
+        set_region_client_rect( region, win->parent, process );
         offset_region( region, -win->parent->client_rect.left, -win->parent->client_rect.top );
     }
     else if (flags & DCX_WINDOW)
@@ -1305,7 +1307,7 @@ static struct region *get_visible_region( struct window *win, unsigned int flags
     }
     else
     {
-        set_region_client_rect( region, win );
+        set_region_client_rect( region, win, process );
         if (win->win_region && !intersect_window_region( region, win )) goto error;
     }
 
@@ -1336,7 +1338,7 @@ static struct region *get_visible_region( struct window *win, unsigned int flags
             offset_x += win->client_rect.left;
             offset_y += win->client_rect.top;
             offset_region( region, win->client_rect.left, win->client_rect.top );
-            set_region_client_rect( tmp, win );
+            set_region_client_rect( tmp, win, process );
             if (win->win_region && !intersect_window_region( tmp, win )) goto error;
             if (!intersect_region( region, region, tmp )) goto error;
             if (is_region_empty( region )) break;
