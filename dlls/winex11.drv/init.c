@@ -277,7 +277,7 @@ BOOL needs_offscreen_rendering( HWND hwnd )
     return FALSE;
 }
 
-void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode )
+void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode, const XVisualInfo *vis )
 {
     struct x11drv_escape_set_drawable escape =
     {
@@ -286,6 +286,7 @@ void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode )
         .dc_rect = *rect,
         .mode = mode,
     };
+    if (vis) escape.visual = *vis;
     NtGdiExtEscape( hdc, NULL, 0, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
 }
 
@@ -440,7 +441,7 @@ static void client_surface_update_offscreen( HWND hwnd, struct x11drv_client_sur
         UNICODE_STRING device_str = RTL_CONSTANT_STRING(displayW);
         surface->hdc_dst = NtGdiOpenDCW( &device_str, NULL, NULL, 0, TRUE, NULL, NULL, NULL );
         surface->hdc_src = NtGdiOpenDCW( &device_str, NULL, NULL, 0, TRUE, NULL, NULL, NULL );
-        set_dc_drawable( surface->hdc_src, surface->window, &surface->rect, IncludeInferiors );
+        set_dc_drawable( surface->hdc_src, surface->window, &surface->rect, IncludeInferiors, NULL );
 #ifdef SONAME_LIBXCOMPOSITE
         if (usexcomposite) pXCompositeRedirectWindow( gdi_display, surface->window, CompositeRedirectManual );
 #endif
@@ -472,6 +473,7 @@ static void X11DRV_client_surface_present( struct client_surface *client, HDC hd
     struct window_surface *win_surface;
     struct x11drv_win_data *data;
     RECT rect_dst, rect;
+    XVisualInfo vis;
     Drawable window;
     HRGN region;
 
@@ -519,11 +521,13 @@ static void X11DRV_client_surface_present( struct client_surface *client, HDC hd
     {
         OffsetRect( &rect_dst, data->rects.client.left - data->rects.visible.left,
                     data->rects.client.top - data->rects.visible.top );
+        vis = data->vis;
         release_win_data( data );
     }
+    else vis = get_other_process_visual( toplevel );
 
     if (get_dc_drawable( surface->hdc_dst, &rect ) != window || !EqualRect( &rect, &rect_dst ))
-        set_dc_drawable( surface->hdc_dst, window, &rect_dst, IncludeInferiors );
+        set_dc_drawable( surface->hdc_dst, window, &rect_dst, IncludeInferiors, &vis );
     if (region) NtGdiExtSelectClipRgn( surface->hdc_dst, region, RGN_COPY );
 
     NtGdiStretchBlt( surface->hdc_dst, 0, 0, rect_dst.right - rect_dst.left, rect_dst.bottom - rect_dst.top,

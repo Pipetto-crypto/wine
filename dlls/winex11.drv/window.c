@@ -102,6 +102,8 @@ static XContext host_window_context = 0;
 
 static const WCHAR whole_window_prop[] =
     {'_','_','w','i','n','e','_','x','1','1','_','w','h','o','l','e','_','w','i','n','d','o','w',0};
+static const WCHAR visual_id_prop[] =
+    {'_','_','w','i','n','e','_','x','1','1','_','v','i','s','u','a','l','_','i','d',0};
 static const WCHAR clip_window_prop[] =
     {'_','_','w','i','n','e','_','x','1','1','_','c','l','i','p','_','w','i','n','d','o','w',0};
 static const WCHAR focus_time_prop[] =
@@ -2855,6 +2857,7 @@ static void create_whole_window( struct x11drv_win_data *data )
 
     XSaveContext( data->display, data->whole_window, winContext, (char *)data->hwnd );
     NtUserSetProp( data->hwnd, whole_window_prop, (HANDLE)data->whole_window );
+    NtUserSetProp( data->hwnd, visual_id_prop, (HANDLE)data->vis.visualid );
 
     set_gamescope_overlay_prop( data->display, data->whole_window, data->hwnd );
 
@@ -2927,6 +2930,7 @@ static void destroy_whole_window( struct x11drv_win_data *data, BOOL already_des
     /* Outlook stops processing messages after destroying a dialog, so we need an explicit flush */
     XFlush( data->display );
     NtUserRemoveProp( data->hwnd, whole_window_prop );
+    NtUserRemoveProp( data->hwnd, visual_id_prop );
 
     /* It's possible that we are in a different thread, when called from
      * set_window_visual, and about to recreate the window. In this case
@@ -3436,6 +3440,17 @@ Window X11DRV_get_whole_window( HWND hwnd )
 }
 
 
+XVisualInfo get_other_process_visual( HWND hwnd )
+{
+    VisualID visualid = (VisualID)(ULONG_PTR)NtUserGetProp( hwnd, visual_id_prop );
+
+    if (visualid && visualid == argb_visual.visualid) 
+        return argb_visual;
+
+    return default_visual;
+}
+
+
 /***********************************************************************
  *		X11DRV_GetDC   (X11DRV.@)
  */
@@ -3472,7 +3487,7 @@ void X11DRV_GetDC( HDC hdc, HWND hwnd, HWND top, const RECT *win_rect,
     else
     {
         escape.drawable = X11DRV_get_whole_window( top );
-        escape.visual = default_visual; /* FIXME: use the right visual for other process window */
+        escape.visual = get_other_process_visual( top );
     }
 
     if (!escape.drawable) return; /* don't create a GC for foreign windows */
