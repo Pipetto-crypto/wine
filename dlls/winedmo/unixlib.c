@@ -45,7 +45,8 @@ int64_t unix_seek_callback( void *opaque, int64_t offset, int whence )
     if (whence == AVSEEK_SIZE) return context->length;
     if (whence == SEEK_END) offset += context->length;
     if (whence == SEEK_CUR) offset += context->position;
-
+	if ((UINT64)offset > context->length) offset = context->length;
+	
     params.offset = offset;
     status = KeUserDispatchCallback( &params.dispatch, sizeof(params), &ret_ptr, &ret_len );
     if (status || ret_len != sizeof(UINT64)) return AVERROR( EINVAL );
@@ -80,7 +81,7 @@ int unix_read_callback( void *opaque, uint8_t *buffer, int size )
         size -= ret;
     } while (size && ret == context->buffer_size);
 
-    if (!total) return AVERROR_EOF;
+    if (!(size = min( (UINT64)size, context->length - context->position ))) return AVERROR_EOF;
     context->position += total;
     return total;
 }
