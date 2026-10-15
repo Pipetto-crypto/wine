@@ -38,6 +38,11 @@ typedef struct AVRational AVRational;
 #include "unixlib.h"
 #include "wine/debug.h"
 
+/* libavcodec/pcm_byte_order_reverse.c */
+#ifdef HAVE_FFMPEG
+extern const AVBitStreamFilter *pff_pcm_byte_order_reverse_bsf;
+#endif
+
 /* unixlib.c */
 extern int64_t unix_seek_callback( void *opaque, int64_t offset, int whence );
 extern int unix_read_callback( void *opaque, uint8_t *buffer, int size );
