@@ -89,12 +89,6 @@ static WDFLDR_CLIENT_INFO *find_client_info(DRIVER_OBJECT *driver)
     return NULL;
 }
 
-/* stub for WdfDriverMiniportUnload (idx 201) */
-static void WINAPI wdf_stub_void_noop(void *arg)
-{
-    TRACE("stub called with %p\n", arg);
-}
-
 NTSTATUS WINAPI WdfVersionBind(DRIVER_OBJECT *driver, UNICODE_STRING *reg_path, 
                                 WDF_BIND_INFO *bind_info, PWDF_COMPONENT_GLOBALS *component_globals)
 {
@@ -151,16 +145,7 @@ NTSTATUS WINAPI WdfVersionBind(DRIVER_OBJECT *driver, UNICODE_STRING *reg_path,
             goto done;
         }
         
-        /* populate index 201 (WdfDriverMiniportUnload) */
-        if (bind_info->FuncCount > 201)
-        {
-            ((void**)client_info->func_table)[201] = wdf_stub_void_noop;
-        }
-    }
-
-    if (bind_info->FuncTable)
-    {
-        *bind_info->FuncTable = client_info->func_table;
+        /* fixme: actually populate the function table (?) */
     }
 
     client_info->globals.Size = sizeof(WDF_COMPONENT_GLOBALS);
