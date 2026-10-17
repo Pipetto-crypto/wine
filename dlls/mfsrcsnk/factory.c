@@ -38,6 +38,9 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void **out)
     if (IsEqualGUID(clsid, &CLSID_MFWAVESinkClassFactory))
         return IClassFactory_QueryInterface(wave_sink_class_factory, riid, out);
 
+    if (IsEqualGUID(clsid, &CLSID_MP3ByteStreamPlugin))
+    	return IClassFactory_QueryInterface(&mp3_byte_stream_plugin_factory, riid, out);
+
     FIXME("Unknown clsid %s.\n", debugstr_guid(clsid));
     return CLASS_E_CLASSNOTAVAILABLE;
 }
