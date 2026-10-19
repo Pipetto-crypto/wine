@@ -20,6 +20,7 @@
 
 #include <float.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include "mfapi.h"
 #include "mfidl.h"
@@ -68,6 +69,16 @@ enum video_frame_sink_flags
     FLAGS_FIRST_FRAME = 0x1,
 };
 
+struct sample_queue
+{
+    IMFSample *samples[2];
+    unsigned int used;
+    unsigned int front;
+    unsigned int back;
+    IMFSample *presentation_sample;
+    bool sample_presented;
+};
+
 struct video_frame_sink
 {
     IMFMediaSink IMFMediaSink_iface;
@@ -80,7 +91,7 @@ struct video_frame_sink
     IUnknown *device_manager;
     IMFMediaType *media_type;
     IMFMediaType *current_media_type;
-    BOOL is_shut_down;
+    bool is_shut_down;
     IMFMediaEventQueue *event_queue;
     IMFMediaEventQueue *stream_event_queue;
     IMFPresentationClock *clock;
@@ -88,16 +99,87 @@ struct video_frame_sink
     float rate;
     enum sink_state state;
     unsigned int flags;
-    IMFSample *sample[2];
-    IMFSample *presentation_sample;
-    int sample_write_index;
-    int sample_read_index;
-    BOOL sample_request_pending;
-    BOOL sample_presented;
+    struct sample_queue queue;
+    bool sample_request_pending;
+    bool eos;
     CRITICAL_SECTION cs;
 };
 
-static void video_frame_sink_set_flag(struct video_frame_sink *sink, unsigned int mask, BOOL value)
+static void video_frame_sink_sample_queue_set_presentation(struct video_frame_sink *sink, IMFSample *sample)
+{
+    struct sample_queue *queue = &sink->queue;
+
+    if (queue->presentation_sample)
+        IMFSample_Release(queue->presentation_sample);
+
+    queue->presentation_sample = sample;
+    queue->sample_presented = FALSE;
+}
+
+static BOOL video_frame_sink_sample_queue_pop(struct video_frame_sink *sink, IMFSample **sample)
+{
+    struct sample_queue *queue = &sink->queue;
+
+    if (queue->used)
+    {
+        *sample = queue->samples[queue->front];
+        queue->front = (queue->front + 1) % ARRAY_SIZE(queue->samples);
+        queue->used--;
+    }
+    else
+        *sample = NULL;
+
+    return *sample != NULL;
+}
+
+static void video_frame_sink_sample_queue_push(struct video_frame_sink *sink, IMFSample *sample,
+        BOOL at_front)
+{
+    struct sample_queue *queue = &sink->queue;
+    IMFSample *old_sample;
+    unsigned int idx;
+
+    /* if queue is full, we drop the oldest sample to make room for the new one */
+    if (queue->used == ARRAY_SIZE(queue->samples))
+    {
+        video_frame_sink_sample_queue_pop(sink, &old_sample);
+        IMFSample_Release(old_sample);
+    }
+
+    if (at_front)
+        idx = queue->front = (ARRAY_SIZE(queue->samples) + queue->front - 1) % ARRAY_SIZE(queue->samples);
+    else
+        idx = queue->back = (queue->back + 1) % ARRAY_SIZE(queue->samples);
+    queue->samples[idx] = sample;
+    queue->used++;
+}
+
+static void video_frame_sink_sample_queue_flush(struct video_frame_sink *sink)
+{
+    struct sample_queue *queue = &sink->queue;
+    IMFSample *sample;
+
+    while (video_frame_sink_sample_queue_pop(sink, &sample))
+        IMFSample_Release(sample);
+
+    queue->used = 0;
+    queue->front = 0;
+    queue->back = ARRAY_SIZE(queue->samples) - 1;
+}
+
+static void video_frame_sink_sample_queue_free(struct video_frame_sink *sink)
+{
+    struct sample_queue *queue = &sink->queue;
+    IMFSample *sample;
+
+    while (video_frame_sink_sample_queue_pop(sink, &sample))
+        IMFSample_Release(sample);
+
+    if (queue->presentation_sample)
+        IMFSample_Release(queue->presentation_sample);
+}
+
+static void video_frame_sink_set_flag(struct video_frame_sink *sink, unsigned int mask, bool value)
 {
     if (value)
         sink->flags |= mask;
@@ -133,26 +215,6 @@ static struct video_frame_sink *impl_from_IMFMediaTypeHandler(IMFMediaTypeHandle
 static struct video_frame_sink *impl_from_IMFGetService(IMFGetService *iface)
 {
     return CONTAINING_RECORD(iface, struct video_frame_sink, IMFGetService_iface);
-}
-
-static void video_frame_sink_samples_release(struct video_frame_sink *sink)
-{
-    for (int i = 0; i < ARRAYSIZE(sink->sample); i++)
-    {
-        if (sink->sample[i])
-        {
-            IMFSample_Release(sink->sample[i]);
-            sink->sample[i] = NULL;
-        }
-    }
-    if (sink->presentation_sample)
-    {
-        IMFSample_Release(sink->presentation_sample);
-        sink->presentation_sample = NULL;
-    }
-    sink->sample_read_index = 0;
-    sink->sample_write_index = 0;
-    sink->sample_presented = FALSE;
 }
 
 static HRESULT WINAPI video_frame_sink_stream_QueryInterface(IMFStreamSink *iface, REFIID riid, void **obj)
@@ -300,7 +362,7 @@ static HRESULT WINAPI video_frame_sink_stream_GetMediaTypeHandler(IMFStreamSink 
 /* must be called with critical section held */
 static void video_frame_sink_stream_request_sample(struct video_frame_sink *sink)
 {
-    if (sink->sample_request_pending)
+    if (sink->sample_request_pending || sink->eos)
         return;
 
     IMFStreamSink_QueueEvent(&sink->IMFStreamSink_iface, MEStreamSinkRequestSample, &GUID_NULL, S_OK, NULL);
@@ -319,15 +381,10 @@ static void video_frame_sink_notify(struct video_frame_sink *sink, unsigned int 
     IMFAsyncResult_Release(result);
 }
 
-static void sample_index_increment(int *index)
-{
-    int prev = *index;
-    *index = (prev + 1) % 2;
-}
-
 static HRESULT WINAPI video_frame_sink_stream_ProcessSample(IMFStreamSink *iface, IMFSample *sample)
 {
     struct video_frame_sink *sink = impl_from_IMFStreamSink(iface);
+    BOOL first_frame = FALSE;
     LONGLONG sampletime;
     HRESULT hr = S_OK;
 
@@ -346,14 +403,7 @@ static HRESULT WINAPI video_frame_sink_stream_ProcessSample(IMFStreamSink *iface
     }
     else if (sink->state == SINK_STATE_RUNNING || sink->state == SINK_STATE_PAUSED)
     {
-        int sample_write_index = sink->sample_write_index;
         hr = IMFSample_GetSampleTime(sample, &sampletime);
-
-        if (sink->sample[sample_write_index])
-        {
-            IMFSample_Release(sink->sample[sample_write_index]);
-            sink->sample[sample_write_index] = NULL;
-        }
 
         if (SUCCEEDED(hr))
         {
@@ -361,11 +411,21 @@ static HRESULT WINAPI video_frame_sink_stream_ProcessSample(IMFStreamSink *iface
             {
                 video_frame_sink_notify(sink, MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY);
                 video_frame_sink_set_flag(sink, FLAGS_FIRST_FRAME, TRUE);
+                first_frame = TRUE;
             }
+            /* else TODO: send MEQualityNotify event */
 
-            IMFSample_AddRef(sink->sample[sample_write_index] = sample);
-            sample_index_increment(&sink->sample_write_index);
-            if (!sink->sample[sink->sample_write_index])
+            IMFSample_AddRef(sample);
+            if (first_frame && sink->rate == 0.0)
+            {
+                video_frame_sink_sample_queue_set_presentation(sink, sample);
+                IMFStreamSink_QueueEvent(&sink->IMFStreamSink_iface, MEStreamSinkScrubSampleComplete,
+                        &GUID_NULL, S_OK, NULL);
+            }
+            else
+                video_frame_sink_sample_queue_push(sink, sample, FALSE);
+
+            if (sink->queue.used != ARRAY_SIZE(sink->queue.samples))
                 video_frame_sink_stream_request_sample(sink);
         }
     }
@@ -391,7 +451,7 @@ static HRESULT WINAPI video_frame_sink_stream_PlaceMarker(IMFStreamSink *iface, 
     }
     else if (sink->state == SINK_STATE_RUNNING)
     {
-        video_frame_sink_samples_release(sink);
+        video_frame_sink_sample_queue_flush(sink);
         hr = IMFMediaEventQueue_QueueEventParamVar(sink->stream_event_queue, MEStreamSinkMarker,
                 &GUID_NULL, S_OK, context_value);
     }
@@ -413,7 +473,7 @@ static HRESULT WINAPI video_frame_sink_stream_Flush(IMFStreamSink *iface)
     if (sink->is_shut_down)
         hr = MF_E_STREAMSINK_REMOVED;
     else
-        video_frame_sink_samples_release(sink);
+        video_frame_sink_sample_queue_flush(sink);
 
     LeaveCriticalSection(&sink->cs);
 
@@ -697,7 +757,7 @@ static ULONG WINAPI video_frame_sink_Release(IMFMediaSink *iface)
             IMFMediaEventQueue_Shutdown(sink->stream_event_queue);
             IMFMediaEventQueue_Release(sink->stream_event_queue);
         }
-        video_frame_sink_samples_release(sink);
+        video_frame_sink_sample_queue_free(sink);
         DeleteCriticalSection(&sink->cs);
         free(sink);
     }
@@ -714,7 +774,7 @@ static HRESULT WINAPI video_frame_sink_GetCharacteristics(IMFMediaSink *iface, D
     if (sink->is_shut_down)
         return MF_E_SHUTDOWN;
 
-    *flags = MEDIASINK_FIXED_STREAMS | MEDIASINK_RATELESS | MEDIASINK_CAN_PREROLL;
+    *flags = MEDIASINK_FIXED_STREAMS | MEDIASINK_RATELESS;
 
     return S_OK;
 }
@@ -868,7 +928,7 @@ static HRESULT WINAPI video_frame_sink_GetPresentationClock(IMFMediaSink *iface,
 static HRESULT WINAPI video_frame_sink_Shutdown(IMFMediaSink *iface)
 {
     struct video_frame_sink *sink = impl_from_IMFMediaSink(iface);
-    HRESULT hr;
+    HRESULT hr = S_OK;
 
     TRACE("%p.\n", iface);
 
@@ -932,9 +992,9 @@ static HRESULT video_frame_sink_set_state(struct video_frame_sink *sink, enum si
 {
     static const DWORD events[] =
     {
-        MEStreamSinkStopped, /* SINK_STATE_STOPPED */
-        MEStreamSinkPaused,  /* SINK_STATE_PAUSED */
-        MEStreamSinkStarted, /* SINK_STATE_RUNNING */
+        [SINK_STATE_STOPPED] = MEStreamSinkStopped,
+        [SINK_STATE_PAUSED] = MEStreamSinkPaused,
+        [SINK_STATE_RUNNING] = MEStreamSinkStarted,
     };
     HRESULT hr = S_OK;
 
@@ -950,22 +1010,17 @@ static HRESULT video_frame_sink_set_state(struct video_frame_sink *sink, enum si
         {
             if (state == SINK_STATE_STOPPED)
             {
-                video_frame_sink_samples_release(sink);
+                video_frame_sink_sample_queue_flush(sink);
                 video_frame_sink_set_flag(sink, FLAGS_FIRST_FRAME, FALSE);
+                sink->sample_request_pending = FALSE;
             }
 
-            if (state == SINK_STATE_RUNNING && sink->state != SINK_STATE_RUNNING)
-            {
-                video_frame_sink_samples_release(sink);
+            if (state == SINK_STATE_RUNNING && (sink->state == SINK_STATE_STOPPED || sink->state == SINK_STATE_PAUSED ||
+                    (sink->state == SINK_STATE_RUNNING && offset != PRESENTATION_CURRENT_POSITION)))
                 video_frame_sink_stream_request_sample(sink);
-            }
 
             if (state != sink->state || state != SINK_STATE_PAUSED)
             {
-                if (sink->rate == 0.0f && state == SINK_STATE_RUNNING)
-                    IMFStreamSink_QueueEvent(&sink->IMFStreamSink_iface, MEStreamSinkScrubSampleComplete,
-                            &GUID_NULL, S_OK, NULL);
-
                 IMFStreamSink_QueueEvent(&sink->IMFStreamSink_iface, events[state], &GUID_NULL, S_OK, NULL);
             }
             sink->state = state;
@@ -1131,6 +1186,7 @@ HRESULT create_video_frame_sink(IMFMediaType *media_type, IUnknown *device_manag
     object->IMFGetService_iface.lpVtbl = &video_frame_sink_stream_get_service_vtbl;
     object->refcount = 1;
     object->rate = 1.0f;
+    object->queue.back = ARRAY_SIZE(object->queue.samples) - 1;
     if ((object->device_manager = device_manager))
         IUnknown_AddRef(object->device_manager);
     object->media_type = media_type;
@@ -1170,10 +1226,10 @@ int video_frame_sink_get_sample(struct video_frame_sink *sink, IMFSample **ret)
     {
         EnterCriticalSection(&sink->cs);
 
-        if (sink->presentation_sample)
+        if (sink->queue.presentation_sample)
         {
-            IMFSample_AddRef(*ret = sink->presentation_sample);
-            sink->sample_presented = TRUE;
+            IMFSample_AddRef(*ret = sink->queue.presentation_sample);
+            sink->queue.sample_presented = TRUE;
         }
 
         LeaveCriticalSection(&sink->cs);
@@ -1185,13 +1241,15 @@ int video_frame_sink_get_sample(struct video_frame_sink *sink, IMFSample **ret)
 static HRESULT sample_get_pts(IMFSample *sample, MFTIME clocktime, LONGLONG *pts)
 {
     HRESULT hr = S_FALSE;
+    LONGLONG sample_pts;
+
     if (sample)
     {
-        if (SUCCEEDED(hr = IMFSample_GetSampleTime(sample, pts)))
+        if (SUCCEEDED(hr = IMFSample_GetSampleTime(sample, &sample_pts)))
         {
-            if (clocktime < *pts)
-                *pts = MINLONGLONG;
-            hr = *pts == MINLONGLONG ? S_FALSE : S_OK;
+            hr = (clocktime >= sample_pts) ? S_OK : S_FALSE;
+            if (hr == S_OK)
+                *pts = sample_pts;
         }
         else
             WARN("Failed to get sample time, hr %#lx.\n", hr);
@@ -1199,48 +1257,46 @@ static HRESULT sample_get_pts(IMFSample *sample, MFTIME clocktime, LONGLONG *pts
     return hr;
 }
 
+/*
+ * This function selects the queued sample with the greatest PTS that is also below the supplied value of clocktime.
+ * If no queued sample has a PTS below the supplied value of clocktime, S_FALSE is returned.
+ * Otherwise S_TRUE is returned, the PTS of the selected sample is provided, and the selected sample will now be returned
+ * by subsequent calls to video_frame_sink_get_sample.
+ * Queued samples with a PTS lower than the PTS of the selected sample will be silently dropped.
+ */
 HRESULT video_frame_sink_get_pts(struct video_frame_sink *sink, MFTIME clocktime, LONGLONG *pts)
 {
     HRESULT hr = S_FALSE;
+    LONGLONG sample_pts;
 
     *pts = MINLONGLONG;
     if (sink)
     {
-        int sample_read_index;
-        BOOL transfer_sample = FALSE;
+        IMFSample *sample;
+        bool transfer_sample = FALSE;
         EnterCriticalSection(&sink->cs);
-        sample_read_index = sink->sample_read_index;
-        hr = sample_get_pts(sink->sample[sample_read_index], clocktime, pts);
-
-        if (hr == S_OK)
+        while (video_frame_sink_sample_queue_pop(sink, &sample))
         {
-            LONGLONG pts2;
-            transfer_sample = TRUE;
-            /* if the second sample we have is also OK, we'll drop the first and use the second */
-            sample_index_increment(&sample_read_index);
-            if (sink->sample[sample_read_index] && sample_get_pts(sink->sample[sample_read_index], clocktime, &pts2) == S_OK)
+            if (sample_get_pts(sample, clocktime, pts) == S_OK)
             {
-                *pts = pts2;
-                IMFSample_Release(sink->sample[sink->sample_read_index]);
-                sink->sample[sink->sample_read_index] = NULL;
-                sink->sample_read_index = sample_read_index;
+                video_frame_sink_sample_queue_set_presentation(sink, sample);
+                transfer_sample = TRUE;
+                hr = S_OK;
             }
-        }
-        else if (sink->presentation_sample && !sink->sample_presented)
-        {
-            hr = sample_get_pts(sink->presentation_sample, clocktime, pts);
+            else
+            {
+                video_frame_sink_sample_queue_push(sink, sample, TRUE);
+                break;
+            }
         }
 
         if (transfer_sample)
-        {
             video_frame_sink_stream_request_sample(sink);
-            if (sink->presentation_sample)
-                IMFSample_Release(sink->presentation_sample);
-            /* transfer ownership from sample array to presentation sample */
-            sink->presentation_sample = sink->sample[sink->sample_read_index];
-            sink->sample[sink->sample_read_index] = NULL;
-            sink->sample_presented = FALSE;
-            sample_index_increment(&sink->sample_read_index);
+        else if (sink->queue.presentation_sample && !sink->queue.sample_presented)
+        {
+            hr = IMFSample_GetSampleTime(sink->queue.presentation_sample, &sample_pts);
+            if (hr == S_OK)
+                *pts = sample_pts;
         }
 
         LeaveCriticalSection(&sink->cs);
@@ -1249,8 +1305,12 @@ HRESULT video_frame_sink_get_pts(struct video_frame_sink *sink, MFTIME clocktime
     return hr;
 }
 
+void video_frame_sink_notify_end_of_presentation_segment(struct video_frame_sink *sink)
+{
+    sink->eos = TRUE;
+}
+
 ULONG video_frame_sink_release(struct video_frame_sink *sink)
 {
     return video_frame_sink_Release(&sink->IMFMediaSink_iface);
 }
-
