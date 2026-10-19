@@ -33,6 +33,9 @@
 #include "initguid.h"
 #include "mmdeviceapi.h"
 #include "audiosessiontypes.h"
+#include "audioclient.h"
+#include "audiopolicy.h"
+#include "wincodec.h"
 
 #include "wine/test.h"
 
@@ -276,9 +279,21 @@ static ID3D11Device *create_d3d11_device(void)
     return NULL;
 }
 
-static HRESULT create_media_engine(IMFMediaEngineNotify *callback, IMFDXGIDeviceManager *manager, UINT32 output_format,
-        REFIID riid, void **obj)
+struct test_extension
 {
+    IMFMediaEngineExtension IMFMediaEngineExtension_iface;
+    LONG refcount;
+    IMFMediaEngine *media_engine;
+    IMFSourceResolver *resolver;
+    BOOL have_bytestream;
+};
+
+static struct test_extension *create_extension(void);
+
+static HRESULT create_media_engine(IMFMediaEngineNotify *callback, IMFDXGIDeviceManager *manager, BOOL add_extension,
+        UINT32 output_format, REFIID riid, void **obj)
+{
+    struct test_extension *extension = NULL;
     IMFMediaEngine *media_engine;
     IMFAttributes *attributes;
     HRESULT hr;
@@ -297,8 +312,22 @@ static HRESULT create_media_engine(IMFMediaEngineNotify *callback, IMFDXGIDevice
     hr = IMFAttributes_SetUINT32(attributes, &MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, output_format);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
+    if (add_extension)
+    {
+        extension = create_extension();
+        ok(!!extension, "Failed to create an extension.\n");
+        hr = IMFAttributes_SetUnknown(attributes, &MF_MEDIA_ENGINE_EXTENSION, (IUnknown *)&extension->IMFMediaEngineExtension_iface);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    }
+
     hr = IMFMediaEngineClassFactory_CreateInstance(factory, 0, attributes, &media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    if (extension)
+    {
+        extension->media_engine = media_engine;
+        IMFMediaEngineExtension_Release(&extension->IMFMediaEngineExtension_iface);
+    }
 
     IMFAttributes_Release(attributes);
 
@@ -311,6 +340,7 @@ static HRESULT create_media_engine(IMFMediaEngineNotify *callback, IMFDXGIDevice
 static void test_factory(void)
 {
     IMFMediaEngineClassFactory *factory, *factory2;
+    IMFMediaEngineClassFactoryEx *factory_ex;
     struct media_engine_notify *notify;
     IMFDXGIDeviceManager *manager;
     IMFMediaEngine *media_engine;
@@ -326,6 +356,15 @@ static void test_factory(void)
         win_skip("Media Engine is not supported.\n");
         return;
     }
+
+    hr = CoCreateInstance(&CLSID_MFMediaEngineClassFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IMFMediaEngineClassFactoryEx,
+            (void **)&factory_ex);
+    ok(hr == S_OK, "Failed to create class factory, hr %#lx.\n", hr);
+    hr = IMFMediaEngineClassFactoryEx_QueryInterface(factory_ex, &IID_IMFMediaEngineClassFactory, (void **)&factory2);
+    ok(hr == S_OK, "got hr %#lx.\n", hr);
+    ok((void *)factory_ex == (void *)factory2, "got %p, %p.\n", factory, factory_ex);
+    IMFMediaEngineClassFactory_Release(factory2);
+    IMFMediaEngineClassFactoryEx_Release(factory_ex);
 
     notify = create_callback();
 
@@ -442,8 +481,9 @@ static void test_CreateInstance(void)
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_Shutdown(void)
+static void test_Shutdown(BOOL add_extension)
 {
+    MF_MEDIA_ENGINE_CANPLAY can_play_state;
     struct media_engine_notify *notify;
     IMFMediaEngineEx *media_engine_ex;
     IMFMediaTimeRange *time_range;
@@ -459,7 +499,7 @@ static void test_Shutdown(void)
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngine, (void **)&media_engine);
     ok(hr == S_OK, "Failed to shut down, hr %#lx.\n", hr);
 
@@ -501,7 +541,7 @@ static void test_Shutdown(void)
     ok(hr == MF_E_SHUTDOWN, "Unexpected hr %#lx.\n", hr);
 
     str = SysAllocString(L"video/mp4");
-    hr = IMFMediaEngine_CanPlayType(media_engine, str, &state);
+    hr = IMFMediaEngine_CanPlayType(media_engine, str, &can_play_state);
     ok(hr == MF_E_SHUTDOWN, "Unexpected hr %#lx.\n", hr);
     SysFreeString(str);
 
@@ -636,7 +676,7 @@ static void test_Shutdown(void)
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_Play(void)
+static void test_Play(BOOL add_extension)
 {
     struct media_engine_notify *notify;
     IMFMediaTimeRange *range, *range1;
@@ -648,7 +688,7 @@ static void test_Play(void)
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngine, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -699,7 +739,7 @@ static void test_Play(void)
     IMFMediaEngine_Release(media_engine);
 
     /* Play -> Pause */
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngine, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -719,7 +759,7 @@ static void test_Play(void)
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_playback_rate(void)
+static void test_playback_rate(BOOL add_extension)
 {
     struct media_engine_notify *notify;
     IMFMediaEngine *media_engine;
@@ -728,7 +768,7 @@ static void test_playback_rate(void)
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngine, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -751,16 +791,116 @@ static void test_playback_rate(void)
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_mute(void)
+static void parse_guid(WCHAR *id, GUID *guid)
+{
+    WCHAR *str;
+
+    str = wcsstr(id, L"%b");
+    str += 2;
+    IIDFromString(str, guid);
+}
+
+static void test_audio_session(BOOL session_count_todo)
+{
+    unsigned int process_session_count = 0;
+    IAudioSessionEnumerator *ase;
+    IAudioSessionManager2 *asm2;
+    IAudioSessionControl2 *asc2;
+    IAudioSessionControl *asc;
+    IMMDeviceEnumerator *mme;
+    IChannelAudioVolume *cav;
+    ISimpleAudioVolume *sav;
+    UINT32 channel_count;
+    int i, j, count;
+    IMMDevice *dev;
+    WCHAR *name;
+    HRESULT hr;
+    GUID guid;
+    DWORD pid;
+    float vol;
+
+    hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER, &IID_IMMDeviceEnumerator, (void**)&mme);
+    if (FAILED(hr))
+    {
+        skip("mmdevapi not available: %#lx.\n", hr);
+        return;
+    }
+
+    hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(mme, eRender, eMultimedia, &dev);
+    ok(hr == S_OK || hr == E_NOTFOUND, "Unexpected hr %#lx.\n", hr);
+    if (hr != S_OK || !dev)
+    {
+        if (hr == E_NOTFOUND)
+            skip("No sound card available.\n");
+        else
+            skip("GetDefaultAudioEndpoint returned %#lx.\n", hr);
+        goto cleanup;
+    }
+    hr = IMMDevice_Activate(dev, &IID_IAudioSessionManager2, CLSCTX_INPROC_SERVER,
+            NULL, (void**)&asm2);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IAudioSessionManager2_GetSessionEnumerator(asm2, &ase);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IAudioSessionEnumerator_GetCount(ase, &count);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    for (i = 0; i < count; i++)
+    {
+        hr = IAudioSessionEnumerator_GetSession(ase, i, &asc);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        hr = IAudioSessionControl_QueryInterface(asc, &IID_IAudioSessionControl2, (void **)&asc2);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        hr = IAudioSessionControl2_GetProcessId(asc2, &pid);
+        if (pid != GetCurrentProcessId())
+            continue;
+        process_session_count++;
+        hr = IAudioSessionControl2_GetSessionIdentifier(asc2, &name);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        parse_guid(name, &guid);
+        ok(!IsEqualGUID(&guid, &GUID_NULL), "unexpected session GUID %s.\n", wine_dbgstr_guid(&guid));
+        CoTaskMemFree(name);
+        hr = IAudioSessionControl2_QueryInterface(asc2, &IID_ISimpleAudioVolume, (void **)&sav);
+        todo_wine ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = ISimpleAudioVolume_GetMasterVolume(sav, &vol);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            ok(vol == 1.0f, "Unexpected volume %.8e.\n", vol);
+            ISimpleAudioVolume_Release(sav);
+            hr = IAudioSessionControl2_QueryInterface(asc2, &IID_IChannelAudioVolume, (void **)&cav);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            hr = IChannelAudioVolume_GetChannelCount(cav, &channel_count);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            for (j = 0; j < channel_count; j++)
+            {
+                hr = IChannelAudioVolume_GetChannelVolume(cav, j, &vol);
+                ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+                ok(vol == 1.0f, "Unexpected channel %u volume %.8e.\n", j, vol);
+            }
+            IChannelAudioVolume_Release(cav);
+        }
+        IAudioSessionControl2_Release(asc2);
+        IAudioSessionControl_Release(asc);
+    }
+    todo_wine_if(session_count_todo) ok(process_session_count == 1, "Unexpected session count %u.\n", process_session_count);
+
+    IAudioSessionEnumerator_Release(ase);
+    IAudioSessionManager2_Release(asm2);
+    IMMDevice_Release(dev);
+cleanup:
+    IMMDeviceEnumerator_Release(mme);
+}
+
+static void test_mute(BOOL add_extension)
 {
     struct media_engine_notify *notify;
     IMFMediaEngine *media_engine;
+    double volume;
     HRESULT hr;
     BOOL ret;
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngine, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -773,6 +913,26 @@ static void test_mute(void)
     ret = IMFMediaEngine_GetMuted(media_engine);
     ok(ret, "Unexpected state.\n");
 
+    hr = IMFMediaEngine_SetMuted(media_engine, FALSE);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    ret = IMFMediaEngine_GetMuted(media_engine);
+    ok(!ret, "Unexpected state.\n");
+
+    hr = IMFMediaEngine_SetVolume(media_engine, 0.0);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    volume = IMFMediaEngine_GetVolume(media_engine);
+    ok(volume == 0.0, "Unexpected volume %.16e.\n", volume);
+
+    ret = IMFMediaEngine_GetMuted(media_engine);
+    ok(!ret, "Unexpected state.\n");
+
+    hr = IMFMediaEngine_SetMuted(media_engine, TRUE);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    test_audio_session(TRUE);
+
     hr = IMFMediaEngine_Shutdown(media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -783,7 +943,7 @@ static void test_mute(void)
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_error(void)
+static void test_error(BOOL add_extension)
 {
     struct media_engine_notify *notify;
     IMFMediaEngine *media_engine;
@@ -793,7 +953,7 @@ static void test_error(void)
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngine, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
@@ -1057,7 +1217,7 @@ static void test_SetSourceFromByteStream(void)
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, FALSE, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
     if (FAILED(hr))
     {
@@ -1093,7 +1253,7 @@ static void test_SetSourceFromByteStream(void)
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_audio_configuration(void)
+static void test_audio_configuration(BOOL add_extension)
 {
     struct media_engine_notify *notify;
     IMFMediaEngineEx *media_engine;
@@ -1102,7 +1262,7 @@ static void test_audio_configuration(void)
 
     notify = create_callback();
 
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_UNKNOWN,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_UNKNOWN,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
     if (FAILED(hr))
     {
@@ -1265,15 +1425,17 @@ static struct test_transfer_notify *create_transfer_notify(void)
     return object;
 }
 
-static void test_TransferVideoFrame(void)
+static void test_TransferVideoFrame(BOOL add_extension)
 {
     struct test_transfer_notify *notify;
     ID3D11Texture2D *texture = NULL, *rb_texture;
     D3D11_MAPPED_SUBRESOURCE map_desc;
     IMFMediaEngineEx *media_engine = NULL;
+    IWICImagingFactory *factory = NULL;
     IMFDXGIDeviceManager *manager;
     ID3D11DeviceContext *context;
     D3D11_TEXTURE2D_DESC desc;
+    IWICBitmap *bitmap = NULL;
     IMFByteStream *stream;
     ID3D11Device *device;
     RECT dst_rect;
@@ -1298,13 +1460,16 @@ static void test_TransferVideoFrame(void)
     hr = IMFDXGIDeviceManager_ResetDevice(manager, (IUnknown *)device, token);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
-    create_media_engine(&notify->IMFMediaEngineNotify_iface, manager, DXGI_FORMAT_B8G8R8X8_UNORM,
+    create_media_engine(&notify->IMFMediaEngineNotify_iface, manager, add_extension, DXGI_FORMAT_B8G8R8X8_UNORM,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
 
     IMFDXGIDeviceManager_Release(manager);
 
     if (!(notify->media_engine = media_engine))
         goto done;
+
+    hr = IMFMediaEngineEx_SetVolume(media_engine, 0.5);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     memset(&desc, 0, sizeof(desc));
     desc.Width = 64;
@@ -1314,6 +1479,13 @@ static void test_TransferVideoFrame(void)
     desc.BindFlags = D3D11_BIND_RENDER_TARGET;
     desc.SampleDesc.Count = 1;
     hr = ID3D11Device_CreateTexture2D(device, &desc, NULL, &texture);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+            &IID_IWICImagingFactory, (void **)&factory);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IWICImagingFactory_CreateBitmap(factory, desc.Width, desc.Height, &GUID_WICPixelFormat32bppBGR,
+            WICBitmapCacheOnLoad, &bitmap);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     url = SysAllocString(L"i420-64x64.avi");
@@ -1369,8 +1541,17 @@ static void test_TransferVideoFrame(void)
     ok(res == 0, "Unexpected %lu%% diff\n", res);
     ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)rb_texture, 0);
 
+    hr = IMFMediaEngineEx_SetVolume(media_engine, 0.5);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    test_audio_session(add_extension);
+
     ID3D11DeviceContext_Release(context);
     ID3D11Texture2D_Release(rb_texture);
+
+    hr = IMFMediaEngineEx_TransferVideoFrame(notify->media_engine, (IUnknown *)bitmap, NULL, &dst_rect, NULL);
+    /* not supported if a DXGI device manager was provided */
+    ok(hr == E_NOINTERFACE, "Unexpected hr %#lx.\n", hr);
 
 done:
     if (media_engine)
@@ -1379,10 +1560,106 @@ done:
         IMFMediaEngineEx_Release(media_engine);
     }
 
+    if (bitmap)
+        IWICBitmap_Release(bitmap);
+    if (factory)
+        IWICImagingFactory_Release(factory);
     if (texture)
         ID3D11Texture2D_Release(texture);
     if (device)
         ID3D11Device_Release(device);
+
+    IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
+}
+
+static void test_TransferVideoFrame_wic(BOOL add_extension)
+{
+    struct test_transfer_notify *notify;
+    UINT lock_buffer_size, lock_buffer_stride;
+    IMFMediaEngineEx *media_engine = NULL;
+    IWICImagingFactory *factory = NULL;
+    IWICBitmap *bitmap = NULL;
+    IMFByteStream *stream;
+    IWICBitmapLock *lock;
+    WICRect wicrc = {0};
+    BYTE *lock_buffer;
+    RECT dst_rect;
+    LONGLONG pts;
+    HRESULT hr;
+    DWORD res;
+    BSTR url;
+
+    stream = load_resource(L"i420-64x64.avi", L"video/avi");
+
+    notify = create_transfer_notify();
+
+    create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_B8G8R8X8_UNORM,
+            &IID_IMFMediaEngineEx, (void **)&media_engine);
+
+    if (!(notify->media_engine = media_engine))
+        goto done;
+
+    wicrc.Width = 64;
+    wicrc.Height = 64;
+
+    hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+            &IID_IWICImagingFactory, (void **)&factory);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IWICImagingFactory_CreateBitmap(factory, wicrc.Width, wicrc.Height, &GUID_WICPixelFormat32bppBGR,
+            WICBitmapCacheOnLoad, &bitmap);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    url = SysAllocString(L"i420-64x64.avi");
+    hr = IMFMediaEngineEx_SetSourceFromByteStream(media_engine, stream, url);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    SysFreeString(url);
+    IMFByteStream_Release(stream);
+
+    res = WaitForSingleObject(notify->frame_ready_event, 5000);
+    ok(!res, "Unexpected res %#lx.\n", res);
+
+    if (FAILED(notify->error))
+    {
+        win_skip("Media engine reported error %#lx, skipping tests.\n", notify->error);
+        goto done;
+    }
+
+    /* FIXME: Wine first video frame is often full of garbage, wait for another update */
+    res = WaitForSingleObject(notify->ready_event, 500);
+    /* It's also missing the MF_MEDIA_ENGINE_EVENT_TIMEUPDATE notifications */
+    todo_wine
+    ok(!res, "Unexpected res %#lx.\n", res);
+
+    SetRect(&dst_rect, 0, 0, wicrc.Width, wicrc.Height);
+    IMFMediaEngineEx_OnVideoStreamTick(notify->media_engine, &pts);
+    hr = IMFMediaEngineEx_TransferVideoFrame(notify->media_engine, (IUnknown *)bitmap, NULL, &dst_rect, NULL);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IWICBitmap_Lock(bitmap, &wicrc, WICBitmapLockRead, &lock);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IWICBitmapLock_GetStride(lock, &lock_buffer_stride);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IWICBitmapLock_GetDataPointer(lock, &lock_buffer_size, &lock_buffer);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(!!lock_buffer, "got null lock_buffer\n");
+    ok(lock_buffer_size == 16384, "got lock_buffer_size %u\n", lock_buffer_size);
+    ok(lock_buffer_stride == wicrc.Width * 4, "got lock_buffer_stride %u\n", lock_buffer_stride);
+    res = check_rgb32_data(L"rgb32frame.bmp", lock_buffer, lock_buffer_stride * wicrc.Height, &dst_rect);
+    ok(res == 0, "Unexpected %lu%% diff\n", res);
+
+    IWICBitmapLock_Release(lock);
+
+done:
+    if (media_engine)
+    {
+        IMFMediaEngineEx_Shutdown(media_engine);
+        IMFMediaEngineEx_Release(media_engine);
+    }
+
+    if (bitmap)
+        IWICBitmap_Release(bitmap);
+    if (factory)
+        IWICImagingFactory_Release(factory);
 
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
@@ -1730,7 +2007,7 @@ static HRESULT WINAPI test_transform_create(UINT input_count, IMFMediaType **inp
     return S_OK;
 }
 
-static void test_effect(void)
+static void test_effect(BOOL add_extension)
 {
     IMFTransform *video_effect = NULL, *video_effect2 = NULL, *audio_effect = NULL, *audio_effect2 = NULL;
     IMFMediaType *video_i420, *video_rgb32, *audio_pcm;
@@ -1799,7 +2076,7 @@ static void test_effect(void)
     hr = IMFDXGIDeviceManager_ResetDevice(manager, (IUnknown *)device, token);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
-    create_media_engine(&notify->IMFMediaEngineNotify_iface, manager, DXGI_FORMAT_B8G8R8X8_UNORM,
+    create_media_engine(&notify->IMFMediaEngineNotify_iface, manager, add_extension, DXGI_FORMAT_B8G8R8X8_UNORM,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
     IMFDXGIDeviceManager_Release(manager);
     notify->media_engine = media_engine;
@@ -1915,7 +2192,7 @@ done:
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
 }
 
-static void test_GetDuration(void)
+static void test_GetDuration(BOOL add_extension)
 {
     static const double allowed_error = 0.000001;
     struct test_transfer_notify *notify;
@@ -1927,7 +2204,7 @@ static void test_GetDuration(void)
     BSTR url;
 
     notify = create_transfer_notify();
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_B8G8R8X8_UNORM,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_B8G8R8X8_UNORM,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     notify->media_engine = media_engine;
@@ -2156,6 +2433,11 @@ struct test_seek_notify
 {
     IMFMediaEngineNotify IMFMediaEngineNotify_iface;
     HANDLE playing_event;
+    HANDLE seeking_event;
+    HANDLE seeked_event;
+    HANDLE time_update_event;
+    BOOL seeking_event_received;
+    BOOL time_update_event_received;
     HRESULT expected_error;
     HRESULT error;
     LONG refcount;
@@ -2195,6 +2477,9 @@ static ULONG WINAPI test_seek_notify_Release(IMFMediaEngineNotify *iface)
     if (!refcount)
     {
         CloseHandle(notify->playing_event);
+        CloseHandle(notify->seeking_event);
+        CloseHandle(notify->seeked_event);
+        CloseHandle(notify->time_update_event);
         free(notify);
     }
 
@@ -2210,6 +2495,17 @@ static HRESULT WINAPI test_seek_notify_EventNotify(IMFMediaEngineNotify *iface, 
     {
     case MF_MEDIA_ENGINE_EVENT_PLAYING:
         SetEvent(notify->playing_event);
+        break;
+    case MF_MEDIA_ENGINE_EVENT_SEEKING:
+        notify->seeking_event_received = TRUE;
+        SetEvent(notify->seeking_event);
+        break;
+    case MF_MEDIA_ENGINE_EVENT_SEEKED:
+        SetEvent(notify->seeked_event);
+        break;
+    case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
+        notify->time_update_event_received = TRUE;
+        SetEvent(notify->time_update_event);
         break;
     case MF_MEDIA_ENGINE_EVENT_ERROR:
         ok(param2 == notify->expected_error, "Unexpected error %#lx\n", param2);
@@ -2235,12 +2531,18 @@ static struct test_seek_notify *create_seek_notify(void)
     object = calloc(1, sizeof(*object));
     object->IMFMediaEngineNotify_iface.lpVtbl = &test_seek_notify_vtbl;
     object->playing_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    object->seeking_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    object->seeked_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    object->time_update_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     ok(!!object->playing_event, "Failed to create an event, error %lu.\n", GetLastError());
+    ok(!!object->seeking_event, "Failed to create an event, error %lu.\n", GetLastError());
+    ok(!!object->seeked_event, "Failed to create an event, error %lu.\n", GetLastError());
+    ok(!!object->time_update_event, "Failed to create an event, error %lu.\n", GetLastError());
     object->refcount = 1;
     return object;
 }
 
-static void test_GetSeekable(void)
+static void test_GetSeekable(BOOL add_extension)
 {
     IMFByteStream *stream, *unseekable_stream = NULL;
     struct test_seek_notify *notify;
@@ -2254,7 +2556,7 @@ static void test_GetSeekable(void)
     BSTR url;
 
     notify = create_seek_notify();
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_B8G8R8X8_UNORM,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_B8G8R8X8_UNORM,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
@@ -2317,7 +2619,7 @@ static void test_GetSeekable(void)
 
     /* Unseekable bytestreams */
     notify = create_seek_notify();
-    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, DXGI_FORMAT_B8G8R8X8_UNORM,
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, add_extension, DXGI_FORMAT_B8G8R8X8_UNORM,
             &IID_IMFMediaEngineEx, (void **)&media_engine);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
@@ -2350,12 +2652,6 @@ done:
     IMFByteStream_Release(stream);
 }
 
-struct test_extension
-{
-    IMFMediaEngineExtension IMFMediaEngineExtension_iface;
-    LONG refcount;
-};
-
 static struct test_extension *impl_from_IMFMediaEngineExtension(IMFMediaEngineExtension *iface)
 {
     return CONTAINING_RECORD(iface, struct test_extension, IMFMediaEngineExtension_iface);
@@ -2387,7 +2683,10 @@ static ULONG WINAPI test_extension_Release(IMFMediaEngineExtension *iface)
     ULONG refcount = InterlockedDecrement(&extension->refcount);
 
     if (!refcount)
+    {
+        IMFSourceResolver_Release(extension->resolver);
         free(extension);
+    }
 
     return refcount;
 }
@@ -2395,14 +2694,28 @@ static ULONG WINAPI test_extension_Release(IMFMediaEngineExtension *iface)
 static HRESULT WINAPI test_extension_CanPlayType(IMFMediaEngineExtension *iface,
         BOOL audio_only, BSTR mime_type, MF_MEDIA_ENGINE_CANPLAY *answer)
 {
-    return 0x80001234;
+    struct test_extension *extension = impl_from_IMFMediaEngineExtension(iface);
+    return extension->media_engine ? IMFMediaEngine_CanPlayType(extension->media_engine, mime_type, answer) : 0x80001234;
 }
 
 static HRESULT WINAPI test_extension_BeginCreateObject(IMFMediaEngineExtension *iface,
         BSTR url, IMFByteStream *bytestream, MF_OBJECT_TYPE type, IUnknown **cancel_cookie,
         IMFAsyncCallback *callback, IUnknown *state)
 {
-    return E_NOTIMPL;
+    struct test_extension *extension = impl_from_IMFMediaEngineExtension(iface);
+    DWORD flags;
+
+    flags = type == MF_OBJECT_BYTESTREAM ? MF_RESOLUTION_BYTESTREAM : MF_RESOLUTION_MEDIASOURCE;
+    flags |= MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE;
+
+    if (bytestream)
+    {
+        extension->have_bytestream = TRUE;
+        return IMFSourceResolver_BeginCreateObjectFromByteStream(extension->resolver, bytestream, url, flags,
+                NULL, NULL, callback, state);
+    }
+    else
+        return IMFSourceResolver_BeginCreateObjectFromURL(extension->resolver, url, flags, NULL, NULL, callback, NULL);
 }
 
 static HRESULT WINAPI test_extension_CancelObjectCreation(IMFMediaEngineExtension *iface,
@@ -2414,7 +2727,13 @@ static HRESULT WINAPI test_extension_CancelObjectCreation(IMFMediaEngineExtensio
 static HRESULT WINAPI test_extension_EndCreateObject(IMFMediaEngineExtension *iface, IMFAsyncResult *result,
         IUnknown **object)
 {
-    return E_NOTIMPL;
+    struct test_extension *extension = impl_from_IMFMediaEngineExtension(iface);
+    MF_OBJECT_TYPE obj_type;
+
+    if (extension->have_bytestream)
+        return IMFSourceResolver_EndCreateObjectFromByteStream(extension->resolver, result, &obj_type, object);
+    else
+        return IMFSourceResolver_EndCreateObjectFromURL(extension->resolver, result, &obj_type, object);
 }
 
 static const IMFMediaEngineExtensionVtbl test_extension_vtbl =
@@ -2431,11 +2750,15 @@ static const IMFMediaEngineExtensionVtbl test_extension_vtbl =
 static struct test_extension *create_extension(void)
 {
     struct test_extension *object;
+    HRESULT hr;
 
     object = calloc(1, sizeof(*object));
 
     object->IMFMediaEngineExtension_iface.lpVtbl = &test_extension_vtbl;
     object->refcount = 1;
+
+    hr = MFCreateSourceResolver(&object->resolver);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     return object;
 }
@@ -2481,6 +2804,181 @@ static void test_media_extension(void)
     IMFMediaEngineExtension_Release(&extension->IMFMediaEngineExtension_iface);
 }
 
+#define test_seek_result(a, b, c) _test_seek_result(__LINE__, a, b, c)
+static void _test_seek_result(int line, IMFMediaEngineEx *media_engine,
+        struct test_seek_notify *notify, double expected_time)
+{
+    static const double allowed_error = 0.05;
+    static const int timeout = 1000;
+    double time;
+    DWORD res;
+
+    ok(notify->seeking_event_received, "Seeking event not received.\n");
+    notify->seeking_event_received = FALSE;
+    res = WaitForSingleObject(notify->seeking_event, timeout);
+    ok_(__FILE__, line)(!res, "Waiting for seeking event returned %#lx.\n", res);
+    res = WaitForSingleObject(notify->seeked_event, timeout);
+    ok_(__FILE__, line)(!res, "Waiting for seeked event returned %#lx.\n", res);
+    res = WaitForSingleObject(notify->time_update_event, timeout);
+    ok_(__FILE__, line)(!res, "Waiting for ready event returned %#lx.\n", res);
+    time = IMFMediaEngineEx_GetCurrentTime(media_engine);
+    ok_(__FILE__, line)(compare_double(time, expected_time, allowed_error), "Unexpected time %lf.\n", time);
+}
+
+static void test_SetCurrentTime(void)
+{
+    static const double allowed_error = 0.05;
+    static const int timeout = 1000;
+    IMFByteStream *stream, *unseekable_stream = NULL;
+    double time, duration, start, end;
+    struct test_seek_notify *notify;
+    IMFMediaEngineEx *media_engine;
+    ULONG refcount;
+    HRESULT hr;
+    DWORD res;
+    BOOL ret;
+    BSTR url;
+
+    notify = create_seek_notify();
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, FALSE, DXGI_FORMAT_B8G8R8X8_UNORM,
+            &IID_IMFMediaEngineEx, (void **)&media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
+
+    stream = load_resource(L"i420-64x64.avi", L"video/avi");
+    url = SysAllocString(L"i420-64x64.avi");
+    hr = IMFMediaEngineEx_SetSourceFromByteStream(media_engine, stream, url);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IMFMediaEngineEx_Play(media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    res = WaitForSingleObject(notify->playing_event, 5000);
+    ok(!res, "Unexpected res %#lx.\n", res);
+
+    duration = IMFMediaEngineEx_GetDuration(media_engine);
+    ok(duration > 0, "Got invalid duration.\n");
+    start = 0;
+    end = duration;
+
+    /* Test playing state */
+    hr = IMFMediaEngineEx_SetCurrentTime(media_engine, end);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+        test_seek_result(media_engine, notify, end);
+
+    /* Test seeking with a negative position */
+    hr = IMFMediaEngineEx_SetCurrentTime(media_engine, -1);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+        test_seek_result(media_engine, notify, 0);
+
+    /* Test seeking beyond duration */
+    hr = IMFMediaEngineEx_SetCurrentTime(media_engine, end + 1);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+        test_seek_result(media_engine, notify, end);
+
+    hr = IMFMediaEngineEx_SetCurrentTimeEx(media_engine, start, MF_MEDIA_ENGINE_SEEK_MODE_NORMAL);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+        test_seek_result(media_engine, notify, start);
+
+    hr = IMFMediaEngineEx_SetCurrentTimeEx(media_engine, end, MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+        test_seek_result(media_engine, notify, end);
+
+    /* Test paused state */
+    hr = IMFMediaEngineEx_Pause(media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IMFMediaEngineEx_SetCurrentTime(media_engine, start);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+    {
+        ok(notify->seeking_event_received, "Seeking event not received.\n");
+        notify->seeking_event_received = FALSE;
+        ok(notify->time_update_event_received, "Time update event not received.\n");
+        notify->time_update_event_received = FALSE;
+        res = WaitForSingleObject(notify->seeking_event, timeout);
+        ok(!res, "Unexpected res %#lx.\n", res);
+        res = WaitForSingleObject(notify->seeked_event, timeout);
+        ok(res == WAIT_TIMEOUT || res == 0, /* No timeout sometimes on Win10+ */
+                "Unexpected res %#lx.\n", res);
+        res = WaitForSingleObject(notify->time_update_event, timeout);
+        ok(!res, "Unexpected res %#lx.\n", res);
+        time = IMFMediaEngineEx_GetCurrentTime(media_engine);
+        ok(compare_double(time, start, allowed_error), "Unexpected time %lf.\n", time);
+    }
+
+    Sleep(end * 1000);
+
+    ret = IMFMediaEngineEx_IsPaused(media_engine);
+    ok(ret, "Unexpected ret %d.\n", ret);
+    time = IMFMediaEngineEx_GetCurrentTime(media_engine);
+    ok(compare_double(time, start, allowed_error)
+            || broken(time >= end) /* Windows 11 21H2 AMD GPU TestBot */, "Unexpected time %lf.\n", time);
+
+    hr = IMFMediaEngineEx_Play(media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    res = WaitForSingleObject(notify->seeked_event, timeout);
+    ok(res == WAIT_TIMEOUT, "Unexpected res %#lx.\n", res);
+
+    /* Media engine is shut down */
+    hr = IMFMediaEngineEx_Shutdown(media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IMFMediaEngineEx_SetCurrentTime(media_engine, start);
+    ok(hr == MF_E_SHUTDOWN, "Unexpected hr %#lx.\n", hr);
+    hr = IMFMediaEngineEx_SetCurrentTimeEx(media_engine, start, MF_MEDIA_ENGINE_SEEK_MODE_NORMAL);
+    ok(hr == MF_E_SHUTDOWN, "Unexpected hr %#lx.\n", hr);
+
+    refcount = IMFMediaEngineEx_Release(media_engine);
+    flaky_wine
+    ok(!refcount, "Got unexpected refcount %lu.\n", refcount);
+
+    /* Unseekable bytestreams */
+    notify = create_seek_notify();
+    hr = create_media_engine(&notify->IMFMediaEngineNotify_iface, NULL, FALSE, DXGI_FORMAT_B8G8R8X8_UNORM,
+            &IID_IMFMediaEngineEx, (void **)&media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    IMFMediaEngineNotify_Release(&notify->IMFMediaEngineNotify_iface);
+    unseekable_stream = create_unseekable_stream(stream);
+    hr = IMFMediaEngineEx_SetSourceFromByteStream(media_engine, unseekable_stream, url);
+    todo_wine
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    if (FAILED(hr))
+        goto done;
+
+    hr = IMFMediaEngineEx_Play(media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    notify->expected_error = MF_E_INVALIDREQUEST;
+    res = WaitForSingleObject(notify->playing_event, 5000);
+    ok(res == S_OK, "Unexpected res %#lx.\n", res);
+
+    hr = IMFMediaEngineEx_SetCurrentTime(media_engine, end);
+    ok(hr == S_OK || broken(hr == MF_INVALID_STATE_ERR) /* Win8 */, "Unexpected hr %#lx.\n", hr);
+    if (hr == S_OK)
+    {
+        ok(!notify->seeking_event_received, "Seeking event received.\n");
+        res = WaitForSingleObject(notify->seeking_event, timeout);
+        ok(res == WAIT_TIMEOUT, "Unexpected res %#lx.\n", res);
+        res = WaitForSingleObject(notify->seeked_event, timeout);
+        ok(res == WAIT_TIMEOUT, "Unexpected res %#lx.\n", res);
+        res = WaitForSingleObject(notify->time_update_event, timeout);
+        ok(!res, "Unexpected res %#lx.\n", res);
+    }
+
+done:
+    hr = IMFMediaEngineEx_Shutdown(media_engine);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    refcount = IMFMediaEngineEx_Release(media_engine);
+    ok(!refcount || broken(refcount == 1) /* Win8.1 */, "Got unexpected refcount %lu.\n", refcount);
+    IMFByteStream_Release(unseekable_stream);
+    SysFreeString(url);
+    IMFByteStream_Release(stream);
+}
+
 START_TEST(mfmediaengine)
 {
     HRESULT hr;
@@ -2503,19 +3001,32 @@ START_TEST(mfmediaengine)
 
     test_factory();
     test_CreateInstance();
-    test_Shutdown();
-    test_Play();
-    test_playback_rate();
-    test_mute();
-    test_error();
+    test_Shutdown(FALSE);
+    test_Shutdown(TRUE);
+    test_Play(FALSE);
+    test_Play(TRUE);
+    test_playback_rate(FALSE);
+    test_playback_rate(TRUE);
+    test_mute(FALSE);
+    test_mute(TRUE);
+    test_error(FALSE);
+    test_error(TRUE);
     test_time_range();
     test_SetSourceFromByteStream();
-    test_audio_configuration();
-    test_TransferVideoFrame();
-    test_effect();
-    test_GetDuration();
-    test_GetSeekable();
+    test_audio_configuration(FALSE);
+    test_audio_configuration(TRUE);
+    test_TransferVideoFrame(FALSE);
+    test_TransferVideoFrame(TRUE);
+    test_TransferVideoFrame_wic(FALSE);
+    test_TransferVideoFrame_wic(TRUE);
+    test_effect(FALSE);
+    test_effect(TRUE);
+    test_GetDuration(FALSE);
+    test_GetDuration(TRUE);
+    test_GetSeekable(FALSE);
+    test_GetSeekable(TRUE);
     test_media_extension();
+    test_SetCurrentTime();
 
     IMFMediaEngineClassFactory_Release(factory);
 
