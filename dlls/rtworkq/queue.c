@@ -932,12 +932,14 @@ static HRESULT queue_cancel_item(struct queue *queue, const RTWQWORKITEM_KEY key
         SetThreadpoolWait(work_object.wait_object, NULL, NULL);
         WaitForThreadpoolWaitCallbacks(work_object.wait_object, TRUE);
         CloseThreadpoolWait(work_object.wait_object);
+        item->u.wait_object = NULL;
     }
     else if (work_object_type == WORK_ITEM_TIMER)
     {
         SetThreadpoolTimer(work_object.timer_object, NULL, 0, 0);
         WaitForThreadpoolTimerCallbacks(work_object.timer_object, TRUE);
         CloseThreadpoolTimer(work_object.timer_object);
+        item->u.timer_object = NULL;
     }
 
     // If the work item is still in pending items, its callback hasn't been invoked yet;
