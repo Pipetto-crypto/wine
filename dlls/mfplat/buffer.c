@@ -1353,7 +1353,6 @@ static HRESULT memory_buffer_init(struct buffer *buffer, DWORD max_length, DWORD
 
     if (!(buffer->data = _aligned_malloc(max_length, alignment)))
         return E_OUTOFMEMORY;
-    memset(buffer->data, 0, max_length);
 
     buffer->IMFMediaBuffer_iface.lpVtbl = vtbl;
     buffer->refcount = 1;
@@ -1406,6 +1405,7 @@ static p_copy_image_func get_2d_buffer_copy_func(DWORD fourcc)
             return copy_image_imc2;
 
         case MAKEFOURCC('N','V','1','2'):
+        case MAKEFOURCC('P','0','1','0'):
             return copy_image_nv12;
 
         default:
@@ -1455,6 +1455,9 @@ static HRESULT create_2d_buffer(DWORD width, DWORD height, DWORD fourcc, BOOL bo
         case MAKEFOURCC('N','V','1','2'):
             plane_size = stride * height * 3 / 2;
             break;
+        case MAKEFOURCC('P','0','1','0'):
+            plane_size = width * height * 3;
+            break;
         default:
             plane_size = stride * height;
     }
@@ -1493,6 +1496,7 @@ static HRESULT create_2d_buffer(DWORD width, DWORD height, DWORD fourcc, BOOL bo
         case MAKEFOURCC('N','V','1','1'):
         case MAKEFOURCC('I','4','2','0'):
         case MAKEFOURCC('I','Y','U','V'):
+        case MAKEFOURCC('P','0','1','0'):
             max_length = pitch * height * 3 / 2;
             break;
         default:
@@ -1734,26 +1738,32 @@ HRESULT WINAPI MFCreateMediaBufferFromMediaType(IMFMediaType *media_type, LONGLO
 
         return create_1d_buffer(length, alignment - 1, buffer);
     }
-    else if (IsEqualGUID(&major, &MFMediaType_Video)
-            && SUCCEEDED(hr = IMFMediaType_GetGUID(media_type, &MF_MT_SUBTYPE, &subtype))
-            && SUCCEEDED(hr = IMFMediaType_GetUINT64(media_type, &MF_MT_FRAME_SIZE, &frame_size))
-            && mf_format_get_stride(&subtype, frame_size >> 32, &is_yuv))
+
+    if (IsEqualGUID(&major, &MFMediaType_Video))
     {
-        BOOL bottom_up = FALSE;
-        UINT32 stride;
+        if (SUCCEEDED(hr = IMFMediaType_GetGUID(media_type, &MF_MT_SUBTYPE, &subtype))
+                && SUCCEEDED(hr = IMFMediaType_GetUINT64(media_type, &MF_MT_FRAME_SIZE, &frame_size))
+                && mf_format_get_stride(&subtype, frame_size >> 32, &is_yuv))
+        {
+            BOOL bottom_up = FALSE;
+            UINT32 stride;
 
-        if (!is_yuv && SUCCEEDED(IMFMediaType_GetUINT32(media_type, &MF_MT_DEFAULT_STRIDE, &stride)))
-            bottom_up = (int)stride < 0;
+            if (!is_yuv && SUCCEEDED(IMFMediaType_GetUINT32(media_type, &MF_MT_DEFAULT_STRIDE, &stride)))
+                bottom_up = (int)stride < 0;
 
-        if (SUCCEEDED(hr = create_2d_buffer(frame_size >> 32, (UINT32)frame_size, subtype.Data1, bottom_up, buffer)))
-            return hr;
+            if (SUCCEEDED(hr = create_2d_buffer(frame_size >> 32, (UINT32)frame_size, subtype.Data1, bottom_up, buffer)))
+                return hr;
+        }
+
+        if (!min_length)
+            return FAILED(hr) ? hr : E_INVALIDARG;
+
+        alignment = max(16, alignment);
+        return create_1d_buffer(min_length, alignment - 1, buffer);
     }
 
-    if (!min_length)
-        return FAILED(hr) ? hr : E_INVALIDARG;
-
-    alignment = max(16, alignment);
-    return create_1d_buffer(min_length, alignment - 1, buffer);
+    FIXME("Major type %s is not supported.\n", debugstr_guid(&major));
+    return E_NOTIMPL;
 }
 
 struct legacy_buffer
@@ -2315,7 +2325,7 @@ static const IMFSampleVtbl legacy_buffer_IMFSample_vtbl =
 
 HRESULT WINAPI MFCreateLegacyMediaBufferOnMFMediaBuffer(IMFSample *sample, IMFMediaBuffer *media_buffer, DWORD offset, IMediaBuffer **obj)
 {
-	struct legacy_buffer *buffer;
+    struct legacy_buffer *buffer;
 
     TRACE("sample %p, media_buffer %p, offset %lu, out %p\n", sample, media_buffer, offset, obj);
 
@@ -2342,5 +2352,5 @@ HRESULT WINAPI MFCreateLegacyMediaBufferOnMFMediaBuffer(IMFSample *sample, IMFMe
 
     TRACE("created %p\n", buffer);
     *obj = &buffer->IMediaBuffer_iface;
-    return S_OK;    
+    return S_OK;
 }
