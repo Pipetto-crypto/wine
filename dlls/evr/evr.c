@@ -349,6 +349,7 @@ static HRESULT evr_copy_sample_buffer(struct evr *filter, const GUID *subtype, I
     IDirect3DSurface9 *surface;
     D3DLOCKED_RECT locked_rect;
     IMFMediaBuffer *buffer;
+    REFERENCE_TIME start, end;
     UINT64 frame_size = 0;
     UINT32 width, lines;
     LONG src_stride;
@@ -376,6 +377,13 @@ static HRESULT evr_copy_sample_buffer(struct evr *filter, const GUID *subtype, I
     {
         WARN("Failed to allocate a sample, hr %#lx.\n", hr);
         return hr;
+    }
+
+    if (SUCCEEDED(IMediaSample_GetTime(input_sample, &start, &end)))
+    {
+    	IMFSample_SetSampleTime(*sample, start);
+    	if (end >= start)
+    	   	IMFSample_SetSampleDuration(*sample, end - start);
     }
 
     if (SUCCEEDED(hr = IMFSample_GetBufferByIndex(*sample, 0, &buffer)))
