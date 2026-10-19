@@ -744,7 +744,6 @@ case $host_os in
     DLLFLAGS="$DLLFLAGS -fPIC"
     LDDLLFLAGS="-fPIC"
     LDEXECFLAGS="-Wl,-pie"
-    enable_wineandroid_drv=${enable_wineandroid_drv:-yes}
     WINE_TRY_CFLAGS([-Wl,-z,defs],[UNIXLDFLAGS="$UNIXLDFLAGS -Wl,-z,defs"])
     WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],[WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
     WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
@@ -819,7 +818,6 @@ case $host_os in
 esac
 
 enable_winecoreaudio_drv=${enable_winecoreaudio_drv:-no}
-enable_wineandroid_drv=${enable_wineandroid_drv:-no}
 enable_winemac_drv=${enable_winemac_drv:-no}
 
 dnl Check for cross compiler(s)
@@ -1392,7 +1390,7 @@ else
     X_LIBS=""
 fi
 
-if test "$enable_wineandroid_drv$enable_winemac_drv" = "nono"
+if test "$enable_winemac_drv" = "no"
 then
     WINE_ERROR_WITH(x,[test "x$X_LIBS" = "x"],
 [X ${notice_platform}development files not found. Wine will be built
@@ -1893,7 +1891,7 @@ WINE_NOTICE_WITH(netapi,[test "x$ac_cv_lib_soname_netapi" = "x"],
 
 
 dnl **** Check for any sound system ****
-if test "x$enable_winealsa_drv$enable_winecoreaudio_drv$enable_winepulse_drv$enable_wineoss_drv$enable_wineandroid_drv" = xnonononono -a \
+if test "x$enable_winealsa_drv$enable_winecoreaudio_drv$enable_winepulse_drv$enable_wineoss_drv" = xnononono -a \
         "x$with_alsa$with_coreaudio$with_oss$with_pulse" != xnononono
 then
     WINE_WARNING([No sound system was found. Windows applications will be silent.])
@@ -2049,6 +2047,8 @@ char*f(const char *h,char n) {return strchr(h,n);}]])],[ac_cv_c_logicalop_noisy=
       case $host_os in
         dnl Mingw uses Windows 64-bit types, not Unix ones
         cygwin*|mingw32*) WINE_TRY_CFLAGS([-Wno-format]) ;;
+        linux-android*|android*) dnl Do not use ms_abi on Android systems
+        ;;
         dnl Default to ms_abi on 64-bit
         *) if test -z "$PE_ARCHS"
            then
@@ -2816,6 +2816,7 @@ WINE_CONFIG_MAKEFILE(dlls/irprops.cpl)
 WINE_CONFIG_MAKEFILE(dlls/itircl)
 WINE_CONFIG_MAKEFILE(dlls/itss)
 WINE_CONFIG_MAKEFILE(dlls/itss/tests)
+WINE_CONFIG_MAKEFILE(dlls/iyuv_32)
 WINE_CONFIG_MAKEFILE(dlls/joy.cpl)
 WINE_CONFIG_MAKEFILE(dlls/jscript)
 WINE_CONFIG_MAKEFILE(dlls/jscript/tests)
@@ -3327,7 +3328,6 @@ WINE_CONFIG_MAKEFILE(dlls/windowscodecs/tests)
 WINE_CONFIG_MAKEFILE(dlls/windowscodecsext)
 WINE_CONFIG_MAKEFILE(dlls/windowscodecsext/tests)
 WINE_CONFIG_MAKEFILE(dlls/winealsa.drv)
-WINE_CONFIG_MAKEFILE(dlls/wineandroid.drv)
 WINE_CONFIG_MAKEFILE(dlls/winebus.sys)
 WINE_CONFIG_MAKEFILE(dlls/winecoreaudio.drv)
 WINE_CONFIG_MAKEFILE(dlls/winecrt0)
@@ -3790,11 +3790,7 @@ WINE_APPEND_RULE(
 programs/winetest/build.rc: dummy
 	@build=\"STRINGTABLE { 1 \\\"\`GIT_DIR=${wine_srcdir}.git git rev-parse HEAD 2>/dev/null\`\\\" }\" && (echo \$\$build | cmp -s - \$[@]) || echo \$\$build >\$[@] || (rm -f \$[@] && exit 1)
 programs/winetest/build.nfo:
-	@-\$(CC) -v 2>\$[@]
-dlls/wineandroid.drv/wine-debug.apk: dlls/wineandroid.drv/build.gradle ${wine_srcdir}dlls/wineandroid.drv/AndroidManifest.xml ${wine_srcdir}dlls/wineandroid.drv/WineActivity.java ${wine_srcdir}dlls/wineandroid.drv/wine.svg
-	cd dlls/wineandroid.drv && gradle -q -Psrcdir=$srcdir assembleDebug
-	mv dlls/wineandroid.drv/build/outputs/apk/wine-debug.apk \$[@]])
-
+	@-\$(CC) -v 2>\$[@]])
 dnl Misc rules
 
 AC_SUBST(TAGSFLAGS,["--langmap='c:+.idl.l.rh,make:(Make*.in)'"])
