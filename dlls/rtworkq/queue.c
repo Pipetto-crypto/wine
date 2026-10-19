@@ -307,15 +307,14 @@ static struct queue system_queues[SYS_QUEUE_COUNT];
 
 static struct queue *get_system_queue(DWORD queue_id)
 {
+	if (RTWQ_CALLBACK_QUEUE_PRIVATE_MASK & queue_id)
+        return NULL;
+        
     switch (queue_id)
     {
     	default:
-        	if (!(RTWQ_CALLBACK_QUEUE_PRIVATE_MASK & queue_id))
-            	return NULL;
-                /* fall through */
-    	case RTWQ_CALLBACK_QUEUE_UNDEFINED:
-    		/* Works in native Windows. Undocumented, but seems to use standard. */
-    		queue_id = RTWQ_CALLBACK_QUEUE_STANDARD;
+    		/* Use standard queue for undefined system queue id's. */
+        	queue_id = RTWQ_CALLBACK_QUEUE_STANDARD;
     		/* fall through */
         case RTWQ_CALLBACK_QUEUE_STANDARD:
         case RTWQ_CALLBACK_QUEUE_RT:
