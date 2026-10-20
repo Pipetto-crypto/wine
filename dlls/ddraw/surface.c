@@ -4449,14 +4449,14 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_BltFast(IDirectDrawSurfac
         return DDERR_BLTFASTCANTCLIP;
     }
 
-    if (src_impl->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+    if ((src_impl->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) && src_impl != dst_impl)
         hr = ddraw_surface_update_frontbuffer(src_impl, src_rect, TRUE, 0);
     if (SUCCEEDED(hr))
         hr = wined3d_device_context_blt(dst_impl->ddraw->immediate_context,
                 ddraw_surface_get_any_texture(dst_impl, DDRAW_SURFACE_RW), dst_impl->sub_resource_idx, &dst_rect,
                 ddraw_surface_get_any_texture(src_impl,DDRAW_SURFACE_READ), src_impl->sub_resource_idx, src_rect,
                 flags, NULL, WINED3D_TEXF_POINT);
-    if (SUCCEEDED(hr) && (dst_impl->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE))
+    if (SUCCEEDED(hr) && (dst_impl->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) && src_impl != dst_impl)
         hr = ddraw_surface_update_frontbuffer(dst_impl, &dst_rect, FALSE, 0);
     wined3d_mutex_unlock();
 

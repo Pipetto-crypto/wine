@@ -1008,6 +1008,7 @@ static HRESULT WINAPI FilterGraph2_Disconnect(IFilterGraph2 *iface, IPin *ppin)
 static HRESULT WINAPI FilterGraph2_SetDefaultSyncSource(IFilterGraph2 *iface)
 {
     struct filter_graph *This = impl_from_IFilterGraph2(iface);
+    IBaseFilter *provider = NULL;
     IReferenceClock *pClock = NULL;
     struct filter *filter;
     HRESULT hr = S_OK;
@@ -1018,8 +1019,21 @@ static HRESULT WINAPI FilterGraph2_SetDefaultSyncSource(IFilterGraph2 *iface)
 
     LIST_FOR_EACH_ENTRY(filter, &This->filters, struct filter, entry)
     {
-        if (IBaseFilter_QueryInterface(filter->filter, &IID_IReferenceClock, (void **)&pClock) == S_OK)
-            break;
+        CLSID clsid;
+
+        if (FAILED(IBaseFilter_QueryInterface(filter->filter, &IID_IReferenceClock, (void **)&pClock)))
+            continue;
+
+        if (SUCCEEDED(IBaseFilter_GetClassID(filter->filter, &clsid))
+                && (IsEqualGUID(&clsid, &CLSID_AudioRender) || IsEqualGUID(&clsid, &CLSID_DSoundRender)))
+        {
+            IReferenceClock_Release(pClock);
+            pClock = NULL;
+            continue;
+        }
+
+        provider = filter->filter;
+        break;
     }
 
     if (!pClock)
@@ -1029,8 +1043,7 @@ static HRESULT WINAPI FilterGraph2_SetDefaultSyncSource(IFilterGraph2 *iface)
     }
     else
     {
-        filter = LIST_ENTRY(list_tail(&This->filters), struct filter, entry);
-        This->refClockProvider = filter->filter;
+        This->refClockProvider = provider;
     }
 
     if (SUCCEEDED(hr))
@@ -1450,26 +1463,124 @@ static HRESULT WINAPI FilterGraph2_Render(IFilterGraph2 *iface, IPin *source)
     return hr;
 }
 
-static HRESULT WINAPI FilterGraph2_RenderFile(IFilterGraph2 *iface, LPCWSTR lpcwstrFile,
-        LPCWSTR lpcwstrPlayList)
+static HRESULT add_source_filter_with_clsid(IFilterGraph2 *iface, const WCHAR *filename,
+        const WCHAR *filter_name, const GUID *source_clsid, IBaseFilter **ret_filter)
+{
+    struct filter_graph *graph = impl_from_IFilterGraph2(iface);
+    IFileSourceFilter *filesource;
+    IBaseFilter *filter;
+    HRESULT hr;
+    GUID clsid;
+
+    TRACE("graph %p, filename %s, filter_name %s, source_clsid %s, ret_filter %p.\n",
+            graph, debugstr_w(filename), debugstr_w(filter_name), debugstr_guid(source_clsid), ret_filter);
+
+    if (!*filename)
+        return VFW_E_NOT_FOUND;
+
+    if (source_clsid)
+        clsid = *source_clsid;
+    else if (!get_media_type(filename, NULL, NULL, &clsid))
+        clsid = CLSID_AsyncReader;
+    TRACE("Using source filter %s.\n", debugstr_guid(&clsid));
+
+    if (FAILED(hr = CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER,
+            &IID_IBaseFilter, (void **)&filter)))
+    {
+        WARN("Failed to create filter, hr %#lx.\n", hr);
+        return hr;
+    }
+
+    if (FAILED(hr = IBaseFilter_QueryInterface(filter, &IID_IFileSourceFilter, (void **)&filesource)))
+    {
+        WARN("Failed to get IFileSourceFilter, hr %#lx.\n", hr);
+        IBaseFilter_Release(filter);
+        return hr;
+    }
+
+    hr = IFileSourceFilter_Load(filesource, filename, NULL);
+    IFileSourceFilter_Release(filesource);
+    if (FAILED(hr))
+    {
+        WARN("Failed to load file, hr %#lx.\n", hr);
+        IBaseFilter_Release(filter);
+        return hr;
+    }
+
+    if (FAILED(hr = IFilterGraph2_AddFilter(iface, filter, filter_name)))
+    {
+        IBaseFilter_Release(filter);
+        return hr;
+    }
+
+    if (ret_filter)
+        *ret_filter = filter;
+    return S_OK;
+}
+
+static BOOL filter_in_snapshot(IBaseFilter *filter, IBaseFilter **snapshot, unsigned int count)
+{
+    unsigned int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (snapshot[i] == filter)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static HRESULT remove_filters_added_after_snapshot(struct filter_graph *graph,
+        IBaseFilter **snapshot, unsigned int count)
+{
+    struct filter *filter, *next;
+    HRESULT hr = S_OK, tmp_hr;
+
+    LIST_FOR_EACH_ENTRY_SAFE(filter, next, &graph->filters, struct filter, entry)
+    {
+        if (filter_in_snapshot(filter->filter, snapshot, count))
+            continue;
+
+        tmp_hr = IFilterGraph2_RemoveFilter(&graph->IFilterGraph2_iface, filter->filter);
+        if (FAILED(tmp_hr) && SUCCEEDED(hr))
+            hr = tmp_hr;
+    }
+
+    return hr;
+}
+
+static HRESULT render_file_with_source_filter(IFilterGraph2 *iface, LPCWSTR filename, const GUID *source_clsid)
 {
     struct filter_graph *This = impl_from_IFilterGraph2(iface);
-    IBaseFilter* preader = NULL;
-    IPin* ppinreader = NULL;
-    IEnumPins* penumpins = NULL;
+    IBaseFilter *preader = NULL;
+    IBaseFilter **filter_snapshot = NULL;
+    IPin *ppinreader = NULL;
+    IEnumPins *penumpins = NULL;
     struct filter *filter;
+    unsigned int filter_count = 0, i = 0;
     HRESULT hr;
     BOOL partial = FALSE;
     BOOL any = FALSE;
 
-    TRACE("(%p/%p)->(%s, %s)\n", This, iface, debugstr_w(lpcwstrFile), debugstr_w(lpcwstrPlayList));
+    if (source_clsid)
+    {
+        LIST_FOR_EACH_ENTRY(filter, &This->filters, struct filter, entry)
+            ++filter_count;
 
-    if (lpcwstrPlayList != NULL)
-        return E_INVALIDARG;
+        if (filter_count && !(filter_snapshot = calloc(filter_count, sizeof(*filter_snapshot))))
+            return E_OUTOFMEMORY;
 
-    hr = IFilterGraph2_AddSourceFilter(iface, lpcwstrFile, L"Reader", &preader);
+        LIST_FOR_EACH_ENTRY(filter, &This->filters, struct filter, entry)
+        {
+            IBaseFilter_AddRef(filter->filter);
+            filter_snapshot[i++] = filter->filter;
+        }
+    }
+
+    hr = add_source_filter_with_clsid(iface, filename, L"Reader", source_clsid, &preader);
     if (FAILED(hr))
-        return hr;
+        goto done;
 
     hr = IBaseFilter_EnumPins(preader, &penumpins);
     if (SUCCEEDED(hr))
@@ -1511,59 +1622,50 @@ static HRESULT WINAPI FilterGraph2_RenderFile(IFilterGraph2 *iface, LPCWSTR lpcw
             hr = S_OK;
         }
     }
+    if (source_clsid && hr != S_OK && FAILED(remove_filters_added_after_snapshot(This, filter_snapshot, filter_count)))
+        WARN("Failed to remove all filters from partial source render.\n");
     IBaseFilter_Release(preader);
+
+done:
+    for (i = 0; i < filter_count; ++i)
+        IBaseFilter_Release(filter_snapshot[i]);
+    free(filter_snapshot);
 
     TRACE("Returning %#lx.\n", hr);
     return hr;
 }
 
+static HRESULT WINAPI FilterGraph2_RenderFile(IFilterGraph2 *iface, LPCWSTR lpcwstrFile,
+        LPCWSTR lpcwstrPlayList)
+{
+    struct filter_graph *graph = impl_from_IFilterGraph2(iface);
+    GUID source_clsid;
+    HRESULT hr;
+
+    TRACE("(%p/%p)->(%s, %s)\n", graph, iface, debugstr_w(lpcwstrFile), debugstr_w(lpcwstrPlayList));
+
+    if (lpcwstrPlayList != NULL)
+        return E_INVALIDARG;
+
+    if (get_media_type(lpcwstrFile, NULL, NULL, &source_clsid)
+            && IsEqualGUID(&source_clsid, &CLSID_WMAsfReader))
+    {
+        TRACE("Trying async reader before ASF source reader for %s.\n", debugstr_w(lpcwstrFile));
+
+        hr = render_file_with_source_filter(iface, lpcwstrFile, &CLSID_AsyncReader);
+        if (hr == S_OK)
+            return hr;
+
+        TRACE("Async reader failed with %#lx; falling back to ASF source reader.\n", hr);
+    }
+
+    return render_file_with_source_filter(iface, lpcwstrFile, NULL);
+}
+
 static HRESULT WINAPI FilterGraph2_AddSourceFilter(IFilterGraph2 *iface,
         const WCHAR *filename, const WCHAR *filter_name, IBaseFilter **ret_filter)
 {
-    struct filter_graph *graph = impl_from_IFilterGraph2(iface);
-    IFileSourceFilter *filesource;
-    IBaseFilter *filter;
-    HRESULT hr;
-    GUID clsid;
-
-    TRACE("graph %p, filename %s, filter_name %s, ret_filter %p.\n",
-            graph, debugstr_w(filename), debugstr_w(filter_name), ret_filter);
-
-    if (!get_media_type(filename, NULL, NULL, &clsid))
-        clsid = CLSID_AsyncReader;
-    TRACE("Using source filter %s.\n", debugstr_guid(&clsid));
-
-    if (FAILED(hr = CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER,
-            &IID_IBaseFilter, (void **)&filter)))
-    {
-        WARN("Failed to create filter, hr %#lx.\n", hr);
-        return hr;
-    }
-
-    if (FAILED(hr = IBaseFilter_QueryInterface(filter, &IID_IFileSourceFilter, (void **)&filesource)))
-    {
-        WARN("Failed to get IFileSourceFilter, hr %#lx.\n", hr);
-        IBaseFilter_Release(filter);
-        return hr;
-    }
-
-    hr = IFileSourceFilter_Load(filesource, filename, NULL);
-    IFileSourceFilter_Release(filesource);
-    if (FAILED(hr))
-    {
-        WARN("Failed to load file, hr %#lx.\n", hr);
-        return hr;
-    }
-
-    if (FAILED(hr = IFilterGraph2_AddFilter(iface, filter, filter_name)))
-    {
-        IBaseFilter_Release(filter);
-        return hr;
-    }
-
-    if (ret_filter)
-        *ret_filter = filter;
-    return S_OK;
+    return add_source_filter_with_clsid(iface, filename, filter_name, NULL, ret_filter);
 }
 
 static HRESULT WINAPI FilterGraph2_SetLogFile(IFilterGraph2 *iface, DWORD_PTR file)

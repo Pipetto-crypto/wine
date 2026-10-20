@@ -356,7 +356,10 @@ static HRESULT dsound_render_sink_connect(struct strmbase_sink *iface, IPin *pee
     filter->write_pos = -1;
 
     if (FAILED(hr = IDirectSound8_CreateSoundBuffer(filter->dsound, &buf_desc, &filter->dsbuffer, NULL)))
+    {
         ERR("Failed to create sound buffer, hr %#lx.\n", hr);
+        strmbase_dump_media_type(mt);
+    }
     else if (FAILED(hr = IDirectSoundBuffer_QueryInterface(filter->dsbuffer, &IID_IDirectSoundNotify,
                 (void **)&notify)))
         ERR("Failed to query IDirectSoundNotify iface, hr %#lx.\n", hr);
@@ -552,7 +555,7 @@ static HRESULT dsound_render_init_stream(struct strmbase_filter *iface)
     filter->eos = FALSE;
     ResetEvent(filter->flush_event);
 
-    return filter->sink.pin.peer ? S_FALSE : S_OK;
+    return S_OK;
 }
 
 static HRESULT dsound_render_start_stream(struct strmbase_filter *iface, REFERENCE_TIME start)
@@ -607,9 +610,10 @@ static HRESULT dsound_render_wait_state(struct strmbase_filter *iface, DWORD tim
 {
     struct dsound_render *filter = impl_from_strmbase_filter(iface);
 
-    if (WaitForSingleObject(filter->state_event, timeout) == WAIT_TIMEOUT)
-        return VFW_S_STATE_INTERMEDIATE;
-    return S_OK;
+    if (WaitForSingleObject(filter->state_event, timeout) != WAIT_TIMEOUT)
+        return S_OK;
+
+    return VFW_S_STATE_INTERMEDIATE;
 }
 
 static const struct strmbase_filter_ops filter_ops =

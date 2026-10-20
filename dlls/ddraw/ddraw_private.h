@@ -114,6 +114,7 @@ struct ddraw
 
     /* DirectDraw things, which are not handled by WineD3D */
     DWORD                   cooperative_level;
+    LONGLONG                next_vblank_time;
 
     /* D3D things */
     HWND                    d3d_window;

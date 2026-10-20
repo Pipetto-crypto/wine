@@ -480,11 +480,14 @@ static HRESULT stream_open(struct stream *stream, struct async_reader *reader, W
 
     stream->number = number;
     stream->reader = reader;
+    stream->running = true;
     list_init(&stream->read_samples);
     list_init(&stream->deliver_samples);
 
-    if (!(stream->read_thread = CreateThread(NULL, 0, stream_read_thread, stream, 0, NULL)))
+    if (!(stream->read_thread = CreateThread(NULL, 0, stream_read_thread, stream, 0, NULL))) {
+    	stream->running = false;
         return E_OUTOFMEMORY;
+    }
 
     if (!(stream->deliver_thread = CreateThread(NULL, 0, stream_deliver_thread, stream, 0, NULL)))
     {
@@ -493,7 +496,6 @@ static HRESULT stream_open(struct stream *stream, struct async_reader *reader, W
         EnterCriticalSection(&reader->callback_cs);
         return E_OUTOFMEMORY;
     }
-    stream->running = true;
 
     return S_OK;
 }
@@ -2259,7 +2261,7 @@ static HRESULT WINAPI async_reader_create(IWMReader **reader)
     object->IWMReaderTypeNegotiation_iface.lpVtbl = &WMReaderTypeNegotiationVtbl;
     object->refcount = 1;
 
-    if (FAILED(hr = winegstreamer_create_wm_sync_reader((IUnknown *)&object->IWMReader_iface,
+    if (FAILED(hr = winedmo_create_wm_sync_reader((IUnknown *)&object->IWMReader_iface,
             (void **)&object->reader_inner)))
         goto failed;
 
