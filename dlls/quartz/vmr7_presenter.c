@@ -33,6 +33,8 @@ struct vmr7_presenter
 
     IDirectDraw7 *ddraw;
     IDirectDrawSurface7 *frontbuffer;
+    HWND window;
+    BOOL yuv_to_rgb;
 };
 
 static struct vmr7_presenter *impl_from_IVMRImagePresenter(IVMRImagePresenter *iface)
@@ -103,6 +105,38 @@ static HRESULT WINAPI image_presenter_StopPresenting(IVMRImagePresenter *iface, 
 static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         DWORD_PTR cookie, VMRPRESENTATIONINFO *info)
 {
+    struct vmr7_presenter *presenter = impl_from_IVMRImagePresenter(iface);
+
+    /* Planar YUV is converted to RGB32 by the renderer, so the surface can be
+     * drawn directly to the video window. */
+    if (presenter->yuv_to_rgb && presenter->window)
+    {
+        DDSURFACEDESC2 surface_desc = {.dwSize = sizeof(surface_desc)};
+        BITMAPINFO bitmap_info = {0};
+        RECT rect;
+        HDC dc;
+
+        if (SUCCEEDED(IDirectDrawSurface7_Lock(info->lpSurf, NULL, &surface_desc, DDLOCK_WAIT | DDLOCK_READONLY, NULL)))
+        {
+            GetClientRect(presenter->window, &rect);
+
+            bitmap_info.bmiHeader.biSize = sizeof(bitmap_info.bmiHeader);
+            bitmap_info.bmiHeader.biWidth = surface_desc.lPitch / 4;
+            bitmap_info.bmiHeader.biHeight = -(LONG)surface_desc.dwHeight;
+            bitmap_info.bmiHeader.biPlanes = 1;
+            bitmap_info.bmiHeader.biBitCount = 32;
+            bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+            dc = GetDC(presenter->window);
+            StretchDIBits(dc, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+                    0, 0, surface_desc.dwWidth, surface_desc.dwHeight, surface_desc.lpSurface,
+                    &bitmap_info, DIB_RGB_COLORS, SRCCOPY);
+            ReleaseDC(presenter->window, dc);
+            IDirectDrawSurface7_Unlock(info->lpSurf, NULL);
+            return S_OK;
+        }
+    }
+
     FIXME("iface %p, cookie %#Ix, info %p, stub!\n", iface, cookie, info);
     return E_NOTIMPL;
 }
@@ -159,7 +193,18 @@ static HRESULT WINAPI surface_allocator_AllocateSurface(IVMRSurfaceAllocator *if
     surface_desc.ddsCaps.dwCaps = DDSCAPS_FLIP | DDSCAPS_COMPLEX | DDSCAPS_OFFSCREENPLAIN;
     surface_desc.dwBackBufferCount = *count;
 
-    if (info->lpHdr->biCompression == BI_RGB)
+    presenter->yuv_to_rgb = info->lpHdr->biCompression == mmioFOURCC('N','V','1','2')
+            || info->lpHdr->biCompression == mmioFOURCC('Y','V','1','2');
+
+    if (presenter->yuv_to_rgb)
+    {
+        surface_desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+        surface_desc.ddpfPixelFormat.dwRGBBitCount = 32;
+        surface_desc.ddpfPixelFormat.dwRBitMask = 0x00ff0000;
+        surface_desc.ddpfPixelFormat.dwGBitMask = 0x0000ff00;
+        surface_desc.ddpfPixelFormat.dwBBitMask = 0x000000ff;
+    }
+    else if (info->lpHdr->biCompression == BI_RGB)
     {
         if (info->lpHdr->biBitCount != 32)
         {
@@ -310,8 +355,12 @@ static HRESULT WINAPI windowless_control_SetAspectRatioMode(
 static HRESULT WINAPI windowless_control_SetVideoClippingWindow(
         IVMRWindowlessControl *iface, HWND window)
 {
-    FIXME("iface %p, window %p, stub!.\n", iface, window);
-    return E_NOTIMPL;
+    struct vmr7_presenter *presenter = impl_from_IVMRWindowlessControl(iface);
+
+    TRACE("iface %p, window %p.\n", iface, window);
+
+    presenter->window = window;
+    return S_OK;
 }
 
 static HRESULT WINAPI windowless_control_RepaintVideo(

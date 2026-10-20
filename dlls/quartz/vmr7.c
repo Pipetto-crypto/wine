@@ -159,6 +159,81 @@ static struct vmr7 *impl_from_IBaseFilter(IBaseFilter *iface)
     return CONTAINING_RECORD(iface, struct vmr7, renderer.filter.IBaseFilter_iface);
 }
 
+static BYTE clamp_rgb_value(int value)
+{
+    if (value < 0)
+        return 0;
+    if (value > 255)
+        return 255;
+    return value;
+}
+
+static void convert_nv12_to_rgb32(BYTE *dst, unsigned int dst_pitch,
+        const BYTE *src, unsigned int src_pitch, unsigned int width, unsigned int height)
+{
+    const BYTE *y_plane = src;
+    const BYTE *uv_plane = src + src_pitch * height;
+    unsigned int x, y;
+
+    for (y = 0; y < height; ++y)
+    {
+        DWORD *dst_row = (DWORD *)(dst + dst_pitch * y);
+        const BYTE *y_row = y_plane + src_pitch * y;
+        const BYTE *uv_row = uv_plane + src_pitch * (y / 2);
+
+        for (x = 0; x < width; ++x)
+        {
+            int c = y_row[x] - 16;
+            int d = uv_row[(x & ~1) + 0] - 128;
+            int e = uv_row[(x & ~1) + 1] - 128;
+            BYTE r, g, b;
+
+            if (c < 0)
+                c = 0;
+
+            r = clamp_rgb_value((298 * c + 409 * e + 128) >> 8);
+            g = clamp_rgb_value((298 * c - 100 * d - 208 * e + 128) >> 8);
+            b = clamp_rgb_value((298 * c + 516 * d + 128) >> 8);
+
+            dst_row[x] = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
+static void convert_yv12_to_rgb32(BYTE *dst, unsigned int dst_pitch,
+        const BYTE *src, unsigned int src_pitch, unsigned int width, unsigned int height)
+{
+    const BYTE *y_plane = src;
+    const BYTE *v_plane = src + src_pitch * height;
+    const BYTE *u_plane = v_plane + (src_pitch / 2) * (height / 2);
+    unsigned int x, y;
+
+    for (y = 0; y < height; ++y)
+    {
+        DWORD *dst_row = (DWORD *)(dst + dst_pitch * y);
+        const BYTE *y_row = y_plane + src_pitch * y;
+        const BYTE *u_row = u_plane + (src_pitch / 2) * (y / 2);
+        const BYTE *v_row = v_plane + (src_pitch / 2) * (y / 2);
+
+        for (x = 0; x < width; ++x)
+        {
+            int c = y_row[x] - 16;
+            int d = u_row[x / 2] - 128;
+            int e = v_row[x / 2] - 128;
+            BYTE r, g, b;
+
+            if (c < 0)
+                c = 0;
+
+            r = clamp_rgb_value((298 * c + 409 * e + 128) >> 8);
+            g = clamp_rgb_value((298 * c - 100 * d - 208 * e + 128) >> 8);
+            b = clamp_rgb_value((298 * c + 516 * d + 128) >> 8);
+
+            dst_row[x] = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
 {
     struct vmr7 *filter = impl_from_IBaseFilter(&iface->filter.IBaseFilter_iface);
@@ -167,6 +242,7 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
     REFERENCE_TIME start_time, end_time;
     VMR9PresentationInfo info = {0};
     D3DLOCKED_RECT locked_rect;
+    D3DSURFACE_DESC surface_desc;
     BYTE *data = NULL;
     HRESULT hr;
     int height;
@@ -222,7 +298,17 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
         return hr;
     }
 
-    if (height > 0 && bitmap_header->biCompression == BI_RGB)
+    if ((bitmap_header->biCompression == mmioFOURCC('N','V','1','2')
+            || bitmap_header->biCompression == mmioFOURCC('Y','V','1','2'))
+            && SUCCEEDED(IDirect3DSurface9_GetDesc(info.lpSurf, &surface_desc))
+            && (surface_desc.Format == D3DFMT_X8R8G8B8 || surface_desc.Format == D3DFMT_A8R8G8B8))
+    {
+        if (bitmap_header->biCompression == mmioFOURCC('N','V','1','2'))
+            convert_nv12_to_rgb32(locked_rect.pBits, locked_rect.Pitch, data, src_pitch, width, abs(height));
+        else
+            convert_yv12_to_rgb32(locked_rect.pBits, locked_rect.Pitch, data, src_pitch, width, abs(height));
+    }
+    else if (height > 0 && bitmap_header->biCompression == BI_RGB)
     {
         BYTE *dst = (BYTE *)locked_rect.pBits + (height * locked_rect.Pitch);
         const BYTE *src = data;
@@ -342,9 +428,16 @@ static HRESULT allocate_surfaces(struct vmr7 *filter, const AM_MEDIA_TYPE *mt)
             break;
 
         case mmioFOURCC('N','V','1','2'):
+        case mmioFOURCC('Y','V','1','2'):
+            /* Planar YUV is converted to RGB32 in vmr_render(), so that it
+             * can be presented even when the device cannot create FOURCC
+             * surfaces. */
+            info.Format = D3DFMT_X8R8G8B8;
+            info.dwFlags = VMR9AllocFlag_TextureSurface;
+            break;
+
         case mmioFOURCC('U','Y','V','Y'):
         case mmioFOURCC('Y','U','Y','2'):
-        case mmioFOURCC('Y','V','1','2'):
             info.Format = bitmap_header->biCompression;
             info.dwFlags = VMR9AllocFlag_OffscreenSurface;
             break;
