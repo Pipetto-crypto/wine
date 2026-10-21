@@ -26,7 +26,9 @@
 #undef _TIME_BITS /* libpulse uses default time bitness convention. */
 
 #include <stdarg.h>
+#include <errno.h>
 #include <pthread.h>
+#include <time.h>
 #include <math.h>
 #include <poll.h>
 
@@ -109,6 +111,8 @@ struct pulse_stream
     struct pulse_period *period;
 };
 
+static void pulse_write(struct pulse_stream *stream);
+
 typedef struct _ACPacket
 {
     struct list entry;
@@ -162,6 +166,22 @@ static void pulse_unlock(void)
 static int pulse_cond_wait(void)
 {
     return pthread_cond_wait(&pulse_cond, &pulse_mutex);
+}
+
+static int pulse_cond_timedwait_ms(unsigned int timeout_ms)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeout_ms / 1000;
+    ts.tv_nsec += (timeout_ms % 1000) * 1000000;
+    if (ts.tv_nsec >= 1000000000)
+    {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000;
+    }
+
+    return pthread_cond_timedwait(&pulse_cond, &pulse_mutex, &ts);
 }
 
 static void pulse_broadcast(void)
@@ -296,7 +316,7 @@ static NTSTATUS pulse_process_detach(void *args)
         pa_context_unref(pulse_ctx);
     }
     if (pulse_ml)
-        pa_mainloop_quit(pulse_ml, 0);
+    	pa_mainloop_quit(pulse_ml, 0);
 
 	free( silence_buf );
     silence_buf = NULL;
@@ -392,14 +412,32 @@ static void pulse_contextcallback(pa_context *c, void *userdata)
 
 static void pulse_stream_state(pa_stream *s, void *user)
 {
+    struct pulse_stream *stream = user;
     pa_stream_state_t state = pa_stream_get_state(s);
-    TRACE("Stream state changed to %i\n", state);
+    TRACE("%p: Stream state changed to %i\n", user, state);
+    if (stream && stream->dataflow == eRender && state == PA_STREAM_READY)
+    {
+        const pa_buffer_attr *attr = pa_stream_get_buffer_attr(s);
+        pa_operation *op;
+
+        if (attr)
+            stream->attr = *attr;
+        if (stream->started)
+        {
+            pulse_write(stream);
+            if (pa_stream_is_corked(s) && (op = pa_stream_cork(s, 0, NULL, NULL)))
+                pa_operation_unref(op);
+        }
+    }
     pulse_broadcast();
 }
 
 static void pulse_attr_update(pa_stream *s, void *user) {
+    struct pulse_stream *stream = user;
     const pa_buffer_attr *attr = pa_stream_get_buffer_attr(s);
-    TRACE("New attributes or device moved:\n");
+    TRACE("%p: New attributes or device moved:\n", user);
+    if (stream && attr)
+        stream->attr = *attr;
     dump_attr(attr);
 }
 
@@ -432,6 +470,17 @@ static void silence_buffer(pa_sample_format_t format, BYTE *buffer, UINT32 bytes
 static BOOL pulse_stream_valid(struct pulse_stream *stream)
 {
     return pa_stream_get_state(stream->stream) == PA_STREAM_READY;
+}
+
+static BOOL pulse_stream_ready(struct pulse_stream *stream)
+{
+    return stream->stream && pa_stream_get_state(stream->stream) == PA_STREAM_READY;
+}
+
+/* No haptic/DualSense stream paths in this tree. */
+static BOOL pulse_stream_haptic(struct pulse_stream *stream)
+{
+    return FALSE;
 }
 
 static HRESULT pulse_connect(const char *name)
@@ -1108,6 +1157,7 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *pul
     attr.tlength = period_bytes * 3;
     attr.maxlength = stream->bufsize_frames * pa_frame_size(&stream->ss);
    	attr.prebuf = 0;	 
+    stream->attr = attr;
     dump_attr(&attr);
 
     /* If specific device was requested, use it exactly */
@@ -1215,7 +1265,7 @@ static NTSTATUS pulse_create_stream(void *args)
     hr = pulse_stream_connect(stream, params->device, stream->period_bytes);
     if (SUCCEEDED(hr)) {
         UINT32 unalign;
-        const pa_buffer_attr *attr = pa_stream_get_buffer_attr(stream->stream);
+        const pa_buffer_attr *attr = pulse_stream_ready(stream) ? pa_stream_get_buffer_attr(stream->stream) : &stream->attr;
         SIZE_T size;
 
         stream->attr = *attr;
@@ -1416,11 +1466,14 @@ write:
 
 static void pulse_write_index_catchup(struct pulse_stream *stream)
 {
-    const pa_timing_info *ti = pa_stream_get_timing_info(stream->stream);
+    const pa_timing_info *ti;
     UINT32 frame_size, to_write;
     int64_t write_index;
 
-    
+    if (!pulse_stream_ready(stream))
+        return;
+
+    ti = pa_stream_get_timing_info(stream->stream);
     if (!ti || ti->read_index <= ti->write_index) return;
 	if (ti->read_index_corrupt || ti->write_index_corrupt)
     {
@@ -1430,15 +1483,21 @@ static void pulse_write_index_catchup(struct pulse_stream *stream)
 
     if (!silence_buf) silence_buf = calloc(1, silence_buf_size);
     frame_size = pa_frame_size(&stream->ss);
+    if (!frame_size) return;
 
     while (ti && ti->read_index > ti->write_index)
     {
         write_index = ti->write_index;
-        TRACE("stream %p, runnind %d, read is ahead of write %lld bytes.\n", stream, stream->started,
+        TRACE("stream %p, running %d, read is ahead of write %lld bytes.\n", stream, stream->started,
               (long long)(ti->read_index - write_index));
 
-        to_write = min(ti->read_index - write_index, silence_buf_size) / frame_size * frame_size;
+        to_write = min(ti->read_index - write_index, min(stream->period_bytes, silence_buf_size)) / frame_size * frame_size;
+        if (!to_write) break;
+        if (!pulse_stream_ready(stream))
+            break;
         pa_stream_write(stream->stream, silence_buf, to_write, NULL, 0, PA_SEEK_RELATIVE);
+        if (!pulse_stream_ready(stream))
+            break;
         ti = pa_stream_get_timing_info(stream->stream);
         if (ti && ti->write_index <= write_index)
         {
@@ -1678,7 +1737,7 @@ static void pulse_update_timing_cb(pa_stream *s, int success, void *user)
 static void pa_streams_timer_cb(pa_mainloop_api *api, pa_time_event *e, const struct timeval *tv, void *userdata)
 {
     struct pulse_period *period = userdata;
-    struct pulse_stream *stream;
+    struct pulse_stream *stream, *next;
     BOOL reset_timeline = FALSE;
     pa_usec_t next_timer;
     int64_t adjust = 0;
@@ -1696,7 +1755,7 @@ static void pa_streams_timer_cb(pa_mainloop_api *api, pa_time_event *e, const st
         reset_timeline = TRUE;
     }
 
-    LIST_FOR_EACH_ENTRY(stream, &period->streams, struct pulse_stream, period_entry)
+    LIST_FOR_EACH_ENTRY_SAFE(stream, next, &period->streams, struct pulse_stream, period_entry)
     {
         if (stream->started)
         {
@@ -1705,16 +1764,18 @@ static void pa_streams_timer_cb(pa_mainloop_api *api, pa_time_event *e, const st
                 stream->timeline_start_period_time = 0;
                 stream->timeline_start_stream_time = 0;
             }
-            if (!stream->update_timing_info_pending && (o = pa_stream_update_timing_info(stream->stream, pulse_update_timing_cb, stream)))
+            if (!pulse_stream_haptic(stream) && !pulse_stream_ready(stream))
+                continue;
+            if (!pulse_stream_haptic(stream) && !stream->update_timing_info_pending && (o = pa_stream_update_timing_info(stream->stream, pulse_update_timing_cb, stream)))
             {
                 pa_operation_unref(o);
                 stream->update_timing_info_pending = TRUE;
             }
-            else if (stream->update_timing_info_pending)
+            else if (!pulse_stream_haptic(stream) && stream->update_timing_info_pending)
             {
                 TRACE("pa_stream_update_timing_info is still pending.\n");
             }
-            else
+            else if (!pulse_stream_haptic(stream))
             {
                 ERR("pa_stream_update_timing_info err %d.\n", pa_context_errno(pulse_ctx));
             }
@@ -2573,7 +2634,7 @@ static NTSTATUS pulse_get_latency(void *args)
         params->result = AUDCLNT_E_DEVICE_INVALIDATED;
         return STATUS_SUCCESS;
     }
-    attr = pa_stream_get_buffer_attr(stream->stream);
+    attr = pulse_stream_ready(stream) ? pa_stream_get_buffer_attr(stream->stream) : &stream->attr;
     if (stream->dataflow == eRender)
         lat = attr->minreq / pa_frame_size(&stream->ss);
     else
@@ -2741,18 +2802,21 @@ static NTSTATUS pulse_set_sample_rate(void *args)
     new_ss = stream->ss;
     new_ss.rate = params->rate;
 
-    o = pa_stream_update_sample_rate(stream->stream, params->rate, pulse_op_cb, &success);
-    if (o)
-        wait_pa_operation_complete(o);
-    else
-        success = 0;
+    if (pulse_stream_ready(stream))
+    {
+        o = pa_stream_update_sample_rate(stream->stream, params->rate, pulse_op_cb, &success);
+        if (o)
+            wait_pa_operation_complete(o);
+        else
+            success = 0;
 
-    if (!success) {
-        hr = E_OUTOFMEMORY;
-        goto exit;
+        if (!success) {
+            hr = E_OUTOFMEMORY;
+            goto exit;
+        }
     }
 
-    if (stream->held_bytes)
+    if (stream->held_bytes && pulse_stream_ready(stream))
         wait_pa_operation_complete(pa_stream_flush(stream->stream, pulse_op_cb, &success));
 
     stream->clock_lastpos = stream->clock_written = 0;
