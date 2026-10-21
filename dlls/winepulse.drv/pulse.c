@@ -209,7 +209,7 @@ static void wait_pa_operation_complete(pa_operation *o)
     if (!o)
         return;
 
-    while (pa_operation_get_state(o) == PA_OPERATION_RUNNING)
+    while (pulse_ml && pa_operation_get_state(o) == PA_OPERATION_RUNNING)
         pulse_cond_wait();
     pa_operation_unref(o);
 }
@@ -244,6 +244,7 @@ static NTSTATUS pulse_process_attach(void *args)
     pthread_mutexattr_init(&attr);
 #ifndef __ANDROID__    
     pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT);
+    pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
 #endif
     if (pthread_mutex_init(&pulse_mutex, &attr) != 0)
         pthread_mutex_init(&pulse_mutex, NULL);
@@ -275,6 +276,14 @@ static NTSTATUS pulse_process_detach(void *args)
     return STATUS_SUCCESS;
 }
 
+static void pulse_main_loop_thread_cleanup(void *context)
+{
+    TRACE("Main loop thread is being aborted.\n");
+
+    pulse_ml = NULL;
+    pulse_broadcast();
+}
+
 static NTSTATUS pulse_main_loop(void *args)
 {
     struct main_loop_params *params = args;
@@ -283,7 +292,9 @@ static NTSTATUS pulse_main_loop(void *args)
     pulse_ml = pa_mainloop_new();
     pa_mainloop_set_poll_func(pulse_ml, pulse_poll_func, NULL);
     NtSetEvent(params->event, NULL);
+    pthread_cleanup_push(pulse_main_loop_thread_cleanup, NULL);
     pa_mainloop_run(pulse_ml, &ret);
+    pthread_cleanup_pop(0);
     pa_mainloop_free(pulse_ml);
     pulse_unlock();
     return STATUS_SUCCESS;
@@ -1246,7 +1257,7 @@ static NTSTATUS pulse_release_stream(void *args)
     pulse_lock();
     if (PA_STREAM_IS_GOOD(pa_stream_get_state(stream->stream))) {
         pa_stream_disconnect(stream->stream);
-        while (PA_STREAM_IS_GOOD(pa_stream_get_state(stream->stream)))
+        while (pulse_ml && PA_STREAM_IS_GOOD(pa_stream_get_state(stream->stream)))
             pulse_cond_wait();
     }
     pa_stream_unref(stream->stream);
