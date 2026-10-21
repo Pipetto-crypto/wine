@@ -1129,7 +1129,6 @@ static HRESULT get_device_period_helper(EDataFlow flow, const char *pulse_name, 
 static NTSTATUS pulse_create_stream(void *args)
 {
     struct create_stream_params *params = args;
-    REFERENCE_TIME period, duration = params->duration;
     struct pulse_stream *stream;
     unsigned int i, bufsize_bytes;
     HRESULT hr;
@@ -1169,22 +1168,14 @@ static NTSTATUS pulse_create_stream(void *args)
     if (FAILED(hr))
         goto exit;
 
-    period = 0;
-    hr = get_device_period_helper(params->flow, params->device, &period, NULL);
-    if (FAILED(hr))
-        goto exit;
-
-    if (duration < 3 * period)
-        duration = 3 * period;
-
-    stream->def_period = period;
+    stream->def_period = params->period;    
     stream->duration = params->duration;
 
-    stream->period_bytes = pa_frame_size(&stream->ss) * muldiv(period, stream->ss.rate, 10000000);
+    stream->period_bytes = pa_frame_size(&stream->ss) * muldiv(params->period, stream->ss.rate, 10000000);
 
-    stream->bufsize_frames = ceil((duration / 10000000.) * params->fmt->nSamplesPerSec);
+    stream->bufsize_frames = ceil((params->duration / 10000000.) * params->fmt->nSamplesPerSec);
     bufsize_bytes = stream->bufsize_frames * pa_frame_size(&stream->ss);
-    stream->mmdev_period_usec = period / 10;
+    stream->mmdev_period_usec = params->period / 10;
 
     stream->share = params->share;
     stream->flags = params->flags;
