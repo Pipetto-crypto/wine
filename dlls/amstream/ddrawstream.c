@@ -1791,13 +1791,20 @@ static HRESULT ddrawstreamsample_create(struct ddraw_stream *parent, IDirectDraw
         }
         else
         {
-            desc.ddpfPixelFormat.dwSize = sizeof(desc.ddpfPixelFormat);
-            desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
-            desc.ddpfPixelFormat.dwRGBBitCount = 32;
-            desc.ddpfPixelFormat.dwRBitMask = 0xff0000;
-            desc.ddpfPixelFormat.dwGBitMask = 0x00ff00;
-            desc.ddpfPixelFormat.dwBBitMask = 0x0000ff;
-            desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0;
+            DDSURFACEDESC mode = {sizeof(mode)};
+            if (FAILED(IDirectDraw_GetDisplayMode(ddraw, &mode)))
+            {
+                desc.ddpfPixelFormat.dwSize = sizeof(desc.ddpfPixelFormat);
+                desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+                desc.ddpfPixelFormat.dwRGBBitCount = 32;
+                desc.ddpfPixelFormat.dwRBitMask = 0xff0000;
+                desc.ddpfPixelFormat.dwGBitMask = 0x00ff00;
+                desc.ddpfPixelFormat.dwBBitMask = 0x0000ff;
+                desc.ddpfPixelFormat.dwRGBAlphaBitMask = 0;
+            }
+            else {
+            	desc.ddpfPixelFormat = mode.ddpfPixelFormat;
+            }
         }
         desc.ddsCaps.dwCaps = DDSCAPS_SYSTEMMEMORY|DDSCAPS_OFFSCREENPLAIN;
         desc.lpSurface = NULL;
