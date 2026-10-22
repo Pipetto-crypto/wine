@@ -203,21 +203,19 @@ static HRESULT asf_stream_query_accept(struct strmbase_pin *iface, const AM_MEDI
 
     TRACE("iface %p, media_type %p.\n", iface, media_type);
 
-    if (FAILED(hr = IWMReader_GetOutputFormat(filter->reader, stream->index, i, &props)))
-        return hr;
-    if (FAILED(hr = IWMOutputMediaProps_GetMediaType(props, NULL, &size)))
+    while (SUCCEEDED(hr = IWMReader_GetOutputFormat(filter->reader, stream->index, i++, &props)))
     {
-        IWMOutputMediaProps_Release(props);
-        return hr;
-    }
-    if (!(mt = malloc(size)))
-    {
-        IWMOutputMediaProps_Release(props);
-        return E_OUTOFMEMORY;
-    }
-
-    do
-    {
+    	if (FAILED(hr = IWMOutputMediaProps_GetMediaType(props, NULL, &size)))
+    	{
+    		IWMOutputMediaProps_Release(props);
+    	    continue;
+    	}
+    	if (!(mt = malloc(size)))
+    	{
+    	 	IWMOutputMediaProps_Release(props);
+    	    continue;
+    	}
+    	    
         if (SUCCEEDED(hr = IWMOutputMediaProps_GetMediaType(props, mt, &size))
                 && IsEqualGUID(&mt->majortype, &media_type->majortype)
                 && IsEqualGUID(&mt->subtype, &media_type->subtype))
@@ -227,9 +225,9 @@ static HRESULT asf_stream_query_accept(struct strmbase_pin *iface, const AM_MEDI
         }
 
         IWMOutputMediaProps_Release(props);
-    } while (SUCCEEDED(hr = IWMReader_GetOutputFormat(filter->reader, stream->index, ++i, &props)));
+        free(mt);
+    }
 
-    free(mt);
     return hr;
 }
 
