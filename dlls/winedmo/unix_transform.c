@@ -249,6 +249,9 @@ static enum AVPixelFormat pix_fmt_from_mf_fourcc( DWORD fourcc )
     case 0x00000016:                  return AV_PIX_FMT_BGR0;   /* D3DFMT_X8R8G8B8 */
     case 0x00000014:                  return AV_PIX_FMT_BGR24;  /* D3DFMT_R8G8B8 */
     case 0x00000020:                  return AV_PIX_FMT_RGBA;   /* D3DFMT_A8B8G8R8 */
+    case 0x00000017:                  return AV_PIX_FMT_RGB565LE; /* D3DFMT_R5G6B5, MFVideoFormat_RGB565 */
+    case 0x00000018:                  return AV_PIX_FMT_RGB555LE; /* D3DFMT_X1R5G5B5, MFVideoFormat_RGB555 */
+    case 0x00000019:                  return AV_PIX_FMT_RGB555LE; /* D3DFMT_A1R5G5B5 */
     default:                          return AV_PIX_FMT_NONE;
     }
 }
@@ -533,6 +536,8 @@ static bool is_packed_rgb_format( enum AVPixelFormat fmt )
     case AV_PIX_FMT_BGR0:
     case AV_PIX_FMT_BGR24:
     case AV_PIX_FMT_RGBA:
+    case AV_PIX_FMT_RGB565LE:
+    case AV_PIX_FMT_RGB555LE:
         return true;
     default:
         return false;
