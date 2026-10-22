@@ -88,11 +88,11 @@ int unix_read_callback( void *opaque, uint8_t *buffer, int size )
 
     while (size)
     {
-		int step, buffer_offset = context->position % context->capacity;
+        int step, buffer_offset = context->position % context->capacity;
 
         if (!context->size && (ret = stream_context_read( context )) < 0) return ret;
-        if (!context->size) break; /* 0 bytes returned: stream signalled EOF */
         if (!(step = min( size, context->size - buffer_offset ))) break;
+        if (!context->size) break;
         memcpy( buffer, context->buffer + buffer_offset, step );
         buffer += step;
         total += step;
@@ -101,9 +101,8 @@ int unix_read_callback( void *opaque, uint8_t *buffer, int size )
         context->position += step;
         if (!(context->position % context->capacity)) context->size = 0;
     }
-    
-    if (!(size = min( (UINT64)size, context->length - context->position ))) return AVERROR_EOF;
-    
+
+    if (!total) return AVERROR_EOF;
     return total;
 }
 
