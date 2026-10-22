@@ -456,13 +456,18 @@ static HRESULT WINAPI multimedia_stream_OpenFile(IAMMultiMediaStream *iface,
         ret = IBaseFilter_EnumPins(BaseFilter, &EnumPins);
 
     if (SUCCEEDED(ret))
-        ret = IEnumPins_Next(EnumPins, 1, &ipin, NULL);
-
-    if (SUCCEEDED(ret))
-    {
-        ret = IPin_QueryDirection(ipin, &pin_direction);
-        if (ret == S_OK && pin_direction == PINDIR_OUTPUT)
-            This->ipin = ipin;
+    {	
+    	HRESULT hr;
+		ret = VFW_E_NOT_FOUND;
+    	
+    	while ((hr = IEnumPins_Next(EnumPins, 1, &ipin, NULL)) == S_OK)  {
+        	if (IPin_QueryDirection(ipin, &pin_direction) == S_OK && pin_direction == PINDIR_OUTPUT) {
+            	This->ipin = ipin;
+            	ret = S_OK;
+            	break;
+        	}
+        	IPin_Release(ipin);
+        }
     }
 
     if (SUCCEEDED(ret) && !(flags & AMMSF_NORENDER))
@@ -471,11 +476,41 @@ static HRESULT WINAPI multimedia_stream_OpenFile(IAMMultiMediaStream *iface,
 
         if (SUCCEEDED(ret = IGraphBuilder_QueryInterface(This->graph, &IID_IFilterGraph2, (void **)&graph)))
         {
-            DWORD renderflags = (flags & AMMSF_RENDERALLSTREAMS) ? 0 : AM_RENDEREX_RENDERTOEXISTINGRENDERERS;
+        	HRESULT first_hr = S_OK;
+        	IPin *ipin;
+        	BOOL accepted = FALSE;
+        	DWORD renderflags = (flags & AMMSF_RENDERALLSTREAMS) ? 0 : AM_RENDEREX_RENDERTOEXISTINGRENDERERS;
+        	
+        	IEnumPins_Reset(EnumPins);
 
-            ret = IFilterGraph2_RenderEx(graph, This->ipin, renderflags, NULL);
-            if (ret == VFW_E_CANNOT_RENDER) ret = VFW_E_CANNOT_CONNECT;
-            else if (ret == VFW_S_PARTIAL_RENDER) ret = S_OK;
+        	while (IEnumPins_Next(EnumPins, 1, &ipin, NULL) == S_OK) {
+        		PIN_DIRECTION direction;
+
+        		if (IPin_QueryDirection(ipin, &direction) == S_OK && direction == PINDIR_OUTPUT) {
+            		HRESULT res = IFilterGraph2_RenderEx(graph, ipin, renderflags, NULL);
+            		if (res == VFW_S_PARTIAL_RENDER) 
+            			res = S_OK;
+            		
+            		if (SUCCEEDED(res)) {
+            			accepted = TRUE;
+            		}
+            		else if (SUCCEEDED(first_hr)) {
+          				first_hr = res;
+            		}
+            	}
+            	IPin_Release(ipin);
+            }
+
+            if (accepted) {
+            	ret = S_OK;
+            }
+            else {
+            	ret = first_hr;
+                if (ret == VFW_E_CANNOT_RENDER || SUCCEEDED(ret))
+                	ret = VFW_E_CANNOT_CONNECT;
+                else if (SUCCEEDED(ret))
+                	ret = VFW_E_CANNOT_CONNECT;
+            }
 
             IFilterGraph2_Release(graph);
         }
