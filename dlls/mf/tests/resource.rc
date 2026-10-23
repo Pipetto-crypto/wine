@@ -63,6 +63,10 @@ mp3decdata.bin RCDATA mp3decdata.bin
 /* @makedep: h264data.bin */
 h264data.bin RCDATA h264data.bin
 
+/* Generated from running the tests on Windows */
+/* @makedep: h264encdata.bin */
+h264encdata.bin RCDATA h264encdata.bin
+
 /* Generated with:
   gst-launch-1.0 videotestsrc num-buffers=30 pattern=smpte100 ! \
       video/x-raw,format=I420,width=84,height=82,framerate=30000/1001 ! \
@@ -86,6 +90,22 @@ h264data-2.bin RCDATA h264data-2.bin
 nv12frame.bmp RCDATA nv12frame.bmp
 
 /* Generated from running the tests on Windows */
+/* @makedep: nv12frame-2d.bmp */
+nv12frame-2d.bmp RCDATA nv12frame-2d.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: nv12frame-crop.bmp */
+nv12frame-crop.bmp RCDATA nv12frame-crop.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: nv12frame-crop-1d.bmp */
+nv12frame-crop-1d.bmp RCDATA nv12frame-crop-1d.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: nv12frame-crop-2d.bmp */
+nv12frame-crop-2d.bmp RCDATA nv12frame-crop-2d.bmp
+
+/* Generated from running the tests on Windows */
 /* @makedep: nv12frame-grabber.bmp */
 nv12frame-grabber.bmp RCDATA nv12frame-grabber.bmp
 
@@ -94,8 +114,16 @@ nv12frame-grabber.bmp RCDATA nv12frame-grabber.bmp
 nv12frame-flip.bmp RCDATA nv12frame-flip.bmp
 
 /* Generated from running the tests on Windows */
+/* @makedep: nv12frame-flip-2d.bmp */
+nv12frame-flip-2d.bmp RCDATA nv12frame-flip-2d.bmp
+
+/* Generated from running the tests on Windows */
 /* @makedep: i420frame.bmp */
 i420frame.bmp RCDATA i420frame.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: i420frame.bmp */
+i420frame-2d.bmp RCDATA i420frame-2d.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame.bmp */
@@ -106,12 +134,20 @@ rgb32frame.bmp RCDATA rgb32frame.bmp
 rgb32frame-flip.bmp RCDATA rgb32frame-flip.bmp
 
 /* Generated from running the tests on Windows */
+/* @makedep: rgb32frame-flip-2d.bmp */
+rgb32frame-flip-2d.bmp RCDATA rgb32frame-flip-2d.bmp
+
+/* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-crop.bmp */
 rgb32frame-crop.bmp RCDATA rgb32frame-crop.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-crop-flip.bmp */
 rgb32frame-crop-flip.bmp RCDATA rgb32frame-crop-flip.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: rgb32frame-crop-flip-2d.bmp */
+rgb32frame-crop-flip-2d.bmp RCDATA rgb32frame-crop-flip-2d.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: abgr32frame-crop.bmp */
@@ -122,16 +158,24 @@ abgr32frame-crop.bmp RCDATA abgr32frame-crop.bmp
 rgb32frame-grabber.bmp RCDATA rgb32frame-grabber.bmp
 
 /* Generated from running the tests on Windows */
+/* @makedep: rgb32frame-extra-width.bmp */
+rgb32frame-extra-width.bmp RCDATA rgb32frame-extra-width.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: nv12frame-extra-width.bmp */
+nv12frame-extra-width.bmp RCDATA nv12frame-extra-width.bmp
+
+/* Generated from running the tests on Windows */
+/* @makedep: nv12frame-extra-width-2d.bmp */
+nv12frame-extra-width-2d.bmp RCDATA nv12frame-extra-width-2d.bmp
+
+/* Generated from running the tests on Windows */
 /* @makedep: rgb555frame.bmp */
 rgb555frame.bmp RCDATA rgb555frame.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb555frame-flip.bmp */
 rgb555frame-flip.bmp RCDATA rgb555frame-flip.bmp
-
-/* Generated from running the tests on Windows */
-/* @makedep: iv50frame.bin */
-iv50frame.bin RCDATA iv50frame.bin
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb24frame.bmp */
@@ -145,3 +189,12 @@ rgb24frame.bmp RCDATA rgb24frame.bmp
  */
 /* @makedep: test.mp4 */
 test.mp4 RCDATA test.mp4
+
+/* Generated with:
+ *  gst-launch-1.0 videotestsrc num-buffers=60 pattern=smpte100 ! \
+ *      video/x-raw,format=I420,width=72,height=64,framerate=30000/1001 ! \
+ *      videoflip method=clockwise ! videoconvert ! \
+ *      x264enc ! mp4mux ! filesink location=dlls/mf/tests/test-unaligned.mp4
+ */
+/* @makedep: test-unaligned.mp4 */
+test-unaligned.mp4 RCDATA test-unaligned.mp4
