@@ -1422,7 +1422,7 @@ static HRESULT WINAPI dinput_device_GetObjectInfo( IDirectInputDevice8W *iface,
     return DI_OK;
 }
 
-static HRESULT WINAPI dinput_device_GetDeviceState( IDirectInputDevice8W *iface, DWORD size, void *data )
+DECLSPEC_CHPE_PATCHABLE HRESULT WINAPI dinput_device_GetDeviceState( IDirectInputDevice8W *iface, DWORD size, void *data )
 {
     struct dinput_device *impl = impl_from_IDirectInputDevice8W( iface );
     DIDATAFORMAT *device_format = &impl->device_format, *user_format = &impl->user_format;
