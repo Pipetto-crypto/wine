@@ -2828,6 +2828,8 @@ static void create_whole_window( struct x11drv_win_data *data )
     }
     data->shaped = (win_rgn != 0);
 
+    if (is_gryphlink_launcher() && argb_visual.visualid) data->vis = argb_visual;
+
     if (data->vis.visualid != default_visual.visualid)
         data->whole_colormap = XCreateColormap( data->display, root_window, data->vis.visual, AllocNone );
 
