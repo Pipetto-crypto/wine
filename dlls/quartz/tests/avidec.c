@@ -1935,7 +1935,6 @@ static void test_source_media_types(IPin *source, AM_MEDIA_TYPE *source_mt, BOOL
 
         hr = IEnumMediaTypes_Next(enummt, 1, &pmt, NULL);
         ok(hr == S_OK, "Got hr %#lx.\n", hr);
-        todo_wine_if(use_rgb24 && i == 8)
         ok(!memcmp(pmt, &expect_mt, offsetof(AM_MEDIA_TYPE, cbFormat)),
                 "%u: Media types didn't match.\n", i);
         ok(!memcmp(pmt->pbFormat, &expect_format, sizeof(VIDEOINFOHEADER)),

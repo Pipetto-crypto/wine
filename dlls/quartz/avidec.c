@@ -593,8 +593,28 @@ static HRESULT avi_decompressor_source_get_media_type(struct strmbase_pin *iface
         }
 
         mt->majortype = MEDIATYPE_Video;
-        mt->subtype = MEDIATYPE_Video;
-        mt->subtype.Data1 = format->bmiHeader.biCompression;
+        if (format->bmiHeader.biCompression == BI_RGB)
+        {
+            if (format->bmiHeader.biBitCount == 32)
+                mt->subtype = MEDIASUBTYPE_RGB32;
+            else if (format->bmiHeader.biBitCount == 24)
+                mt->subtype = MEDIASUBTYPE_RGB24;
+            else if (format->bmiHeader.biBitCount == 16)
+                mt->subtype = MEDIASUBTYPE_RGB555;
+            else if (format->bmiHeader.biBitCount == 8)
+                mt->subtype = MEDIASUBTYPE_RGB8;
+            else
+            {
+                FIXME("Unsupported bit count %d\n", format->bmiHeader.biBitCount);
+                CoTaskMemFree(format);
+                return VFW_S_NO_MORE_ITEMS;
+            }
+        }
+        else
+        {
+            mt->subtype = MEDIATYPE_Video;
+            mt->subtype.Data1 = format->bmiHeader.biCompression;
+        }
         mt->bFixedSizeSamples = TRUE;
         mt->lSampleSize = format->bmiHeader.biSizeImage;
         mt->formattype = FORMAT_VideoInfo;
