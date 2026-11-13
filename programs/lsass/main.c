@@ -20,6 +20,7 @@
 #include <stdarg.h>
 
 #include "windows.h"
+#include "winternl.h"
 #include "winsvc.h"
 
 #include "wine/debug.h"
@@ -94,7 +95,10 @@ int __cdecl wmain( int argc, WCHAR *argv[] )
         { samssW, ServiceMain },
         { NULL, NULL }
     };
+    ULONG session_id = 0;
 
+    NtSetInformationProcess( GetCurrentProcess(), ProcessWineSessionId,
+                             &session_id, sizeof(session_id) );
     StartServiceCtrlDispatcherW( service_table );
     return 0;
 }

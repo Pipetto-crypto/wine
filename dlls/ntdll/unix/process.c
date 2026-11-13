@@ -1966,6 +1966,18 @@ NTSTATUS WINAPI NtSetInformationProcess( HANDLE handle, PROCESSINFOCLASS class, 
         SERVER_END_REQ;
         break;
 
+    case ProcessWineSessionId:
+        if (size != sizeof(ULONG)) return STATUS_INFO_LENGTH_MISMATCH;
+        SERVER_START_REQ( set_process_session )
+        {
+            req->handle = wine_server_obj_handle( handle );
+            req->session_id = *(const ULONG *)info;
+            ret = wine_server_call( req );
+        }
+        SERVER_END_REQ;
+        if (!ret && handle == GetCurrentProcess()) peb->SessionId = *(const ULONG *)info;
+        break;
+
     case ProcessPowerThrottlingState:
         FIXME( "ProcessPowerThrottlingState - stub\n" );
         return STATUS_SUCCESS;

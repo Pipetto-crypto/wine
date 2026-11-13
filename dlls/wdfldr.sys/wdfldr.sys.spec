@@ -3,7 +3,7 @@
 @ stub WdfLdrDiagnosticsValueByNameAsULONG
 @ stub WdfLdrQueryInterface
 @ stub WdfRegisterClassLibrary
-@ stub WdfRegisterLibrary
+@ stdcall WdfRegisterLibrary(ptr ptr ptr)
 @ stdcall WdfVersionBind(ptr ptr ptr ptr)
 @ stub WdfVersionBindClass
 @ stdcall WdfVersionUnbind(ptr ptr ptr)

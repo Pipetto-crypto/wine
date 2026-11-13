@@ -44,5 +44,13 @@ int __cdecl wmain(int argc, WCHAR *argv[])
             }
         }
     }
+
+    /* HACK: Netmarble Launcher installer uses powershell to check if it's already running */
+    if (argc > 2 && wcsstr(argv[2], L"Netmarble Launcher"))
+    {
+        WINE_FIXME("HACK: returning 1 for Netmarble Launcher.\n");
+        return 1;
+    }
+
     return 0;
 }

@@ -102,6 +102,8 @@ static XContext host_window_context = 0;
 
 static const WCHAR whole_window_prop[] =
     {'_','_','w','i','n','e','_','x','1','1','_','w','h','o','l','e','_','w','i','n','d','o','w',0};
+static const WCHAR visual_id_prop[] =
+    {'_','_','w','i','n','e','_','x','1','1','_','v','i','s','u','a','l','_','i','d',0};
 static const WCHAR clip_window_prop[] =
     {'_','_','w','i','n','e','_','x','1','1','_','c','l','i','p','_','w','i','n','d','o','w',0};
 static const WCHAR focus_time_prop[] =
@@ -1789,6 +1791,17 @@ static int skip_iconify(void)
     return cached;
 }
 
+static BOOL skip_map_window( HWND hwnd )
+{
+    WCHAR class_name[64];
+    UNICODE_STRING class_str = { .Buffer = class_name, .MaximumLength = sizeof(class_name) };
+
+    NtUserGetClassName( hwnd, FALSE, &class_str );
+    return !wcscmp( class_name, u"CoverWindow" ) || !wcscmp( class_name, u"mainBg.xml" )
+        || !wcscmp( class_name, u"CustomInstallWndBg.xml" ) || !wcscmp( class_name, u"MessageBoxBg.xml" );
+
+}
+
 static void window_set_wm_state( struct x11drv_win_data *data, UINT new_state, BOOL activate )
 {
     UINT old_state = data->pending_state.wm_state;
@@ -1891,7 +1904,10 @@ static void window_set_wm_state( struct x11drv_win_data *data, UINT new_state, B
     case MAKELONG(WithdrawnState, NormalState):
     case MAKELONG(IconicState, NormalState):
         if (data->embedded) set_xembed_flags( data, XEMBED_MAPPED );
-        else XMapWindow( data->display, data->whole_window );
+        else if (skip_map_window( data->hwnd ))
+            WARN( "HACK: not mapping overlay window.\n ");
+        else
+            XMapWindow( data->display, data->whole_window);
         break;
     case MAKELONG(NormalState, WithdrawnState):
     case MAKELONG(IconicState, WithdrawnState):
@@ -2812,6 +2828,8 @@ static void create_whole_window( struct x11drv_win_data *data )
     }
     data->shaped = (win_rgn != 0);
 
+    if (is_gryphlink_launcher() && argb_visual.visualid) data->vis = argb_visual;
+
     if (data->vis.visualid != default_visual.visualid)
         data->whole_colormap = XCreateColormap( data->display, root_window, data->vis.visual, AllocNone );
 
@@ -2841,6 +2859,7 @@ static void create_whole_window( struct x11drv_win_data *data )
 
     XSaveContext( data->display, data->whole_window, winContext, (char *)data->hwnd );
     NtUserSetProp( data->hwnd, whole_window_prop, (HANDLE)data->whole_window );
+    NtUserSetProp( data->hwnd, visual_id_prop, (HANDLE)data->vis.visualid );
 
     set_gamescope_overlay_prop( data->display, data->whole_window, data->hwnd );
 
@@ -2913,6 +2932,7 @@ static void destroy_whole_window( struct x11drv_win_data *data, BOOL already_des
     /* Outlook stops processing messages after destroying a dialog, so we need an explicit flush */
     XFlush( data->display );
     NtUserRemoveProp( data->hwnd, whole_window_prop );
+    NtUserRemoveProp( data->hwnd, visual_id_prop );
 
     /* It's possible that we are in a different thread, when called from
      * set_window_visual, and about to recreate the window. In this case
@@ -3422,6 +3442,17 @@ Window X11DRV_get_whole_window( HWND hwnd )
 }
 
 
+XVisualInfo get_other_process_visual( HWND hwnd )
+{
+    VisualID visualid = (VisualID)(ULONG_PTR)NtUserGetProp( hwnd, visual_id_prop );
+
+    if (visualid && visualid == argb_visual.visualid) 
+        return argb_visual;
+
+    return default_visual;
+}
+
+
 /***********************************************************************
  *		X11DRV_GetDC   (X11DRV.@)
  */
@@ -3458,7 +3489,7 @@ void X11DRV_GetDC( HDC hdc, HWND hwnd, HWND top, const RECT *win_rect,
     else
     {
         escape.drawable = X11DRV_get_whole_window( top );
-        escape.visual = default_visual; /* FIXME: use the right visual for other process window */
+        escape.visual = get_other_process_visual( top );
     }
 
     if (!escape.drawable) return; /* don't create a GC for foreign windows */

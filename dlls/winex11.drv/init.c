@@ -277,7 +277,7 @@ BOOL needs_offscreen_rendering( HWND hwnd )
     return FALSE;
 }
 
-void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode )
+void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode, const XVisualInfo *vis )
 {
     struct x11drv_escape_set_drawable escape =
     {
@@ -286,6 +286,7 @@ void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode )
         .dc_rect = *rect,
         .mode = mode,
     };
+    if (vis) escape.visual = *vis;
     NtGdiExtEscape( hdc, NULL, 0, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
 }
 
@@ -321,6 +322,7 @@ struct x11drv_client_surface
     HDC hdc_src;
     HDC hdc_dst;
     BOOL other_process;
+    BOOL argb;
 };
 
 static struct x11drv_client_surface *impl_from_client_surface( struct client_surface *client )
@@ -440,7 +442,8 @@ static void client_surface_update_offscreen( HWND hwnd, struct x11drv_client_sur
         UNICODE_STRING device_str = RTL_CONSTANT_STRING(displayW);
         surface->hdc_dst = NtGdiOpenDCW( &device_str, NULL, NULL, 0, TRUE, NULL, NULL, NULL );
         surface->hdc_src = NtGdiOpenDCW( &device_str, NULL, NULL, 0, TRUE, NULL, NULL, NULL );
-        set_dc_drawable( surface->hdc_src, surface->window, &surface->rect, IncludeInferiors );
+        set_dc_drawable( surface->hdc_src, surface->window, &surface->rect, IncludeInferiors,
+                         surface->argb && !surface->other_process ? &argb_visual : NULL );
 #ifdef SONAME_LIBXCOMPOSITE
         if (usexcomposite) pXCompositeRedirectWindow( gdi_display, surface->window, CompositeRedirectManual );
 #endif
@@ -472,6 +475,7 @@ static void X11DRV_client_surface_present( struct client_surface *client, HDC hd
     struct window_surface *win_surface;
     struct x11drv_win_data *data;
     RECT rect_dst, rect;
+    XVisualInfo vis;
     Drawable window;
     HRGN region;
 
@@ -519,11 +523,13 @@ static void X11DRV_client_surface_present( struct client_surface *client, HDC hd
     {
         OffsetRect( &rect_dst, data->rects.client.left - data->rects.visible.left,
                     data->rects.client.top - data->rects.visible.top );
+        vis = data->vis;
         release_win_data( data );
     }
+    else vis = get_other_process_visual( toplevel );
 
     if (get_dc_drawable( surface->hdc_dst, &rect ) != window || !EqualRect( &rect, &rect_dst ))
-        set_dc_drawable( surface->hdc_dst, window, &rect_dst, IncludeInferiors );
+        set_dc_drawable( surface->hdc_dst, window, &rect_dst, IncludeInferiors, &vis );
     if (region) NtGdiExtSelectClipRgn( surface->hdc_dst, region, RGN_COPY );
 
     NtGdiStretchBlt( surface->hdc_dst, 0, 0, rect_dst.right - rect_dst.left, rect_dst.bottom - rect_dst.top,
@@ -559,6 +565,31 @@ static BOOL disable_opwr(void)
     return disable;
 }
 
+static BOOL path_contains( const WCHAR *path, const WCHAR *needle )
+{
+    size_t len = wcslen( needle );
+
+    for (; *path; path++)
+        if (!wcsnicmp( path, needle, len )) return TRUE;
+    return FALSE;
+}
+
+BOOL is_gryphlink_launcher(void)
+{
+    static int cached = -1;
+
+    if (cached == -1)
+    {
+        const WCHAR *image = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+
+        cached = (path_contains( image, u"\\GRYPHLINK\\" ) &&
+                  !path_contains( image, u"\\GRYPHLINK\\games\\" )) ||
+                 (path_contains( image, u"\\ArknightsEndfieldgowoU\\" ) &&
+                  !path_contains( image, u"\\ArknightsEndfieldgowoU\\games\\" ));
+    }
+    return cached;
+}
+
 Window x11drv_client_surface_create( HWND hwnd, BOOL raw, int format, struct client_surface **client )
 {
     UINT dpi = raw ? NtUserGetWinMonitorDpi( hwnd, MDT_WINE_RAW_DPI ) : NtUserGetDpiForWindow( hwnd );
@@ -568,6 +599,7 @@ Window x11drv_client_surface_create( HWND hwnd, BOOL raw, int format, struct cli
     Colormap colormap;
 
     if (format && !visual_from_pixel_format( format, &visual )) return None;
+    if (!format && is_gryphlink_launcher() && argb_visual.visualid) visual = argb_visual;
 
     if (visual.visualid == default_visual.visualid) colormap = default_colormap;
     else colormap = XCreateColormap( gdi_display, get_dummy_parent(), visual.visual, visual_class_alloc( visual.class ) );
@@ -576,6 +608,7 @@ Window x11drv_client_surface_create( HWND hwnd, BOOL raw, int format, struct cli
     if (!(surface = client_surface_create( sizeof(*surface), &x11drv_client_surface_funcs, hwnd ))) goto failed;
     surface->colormap = colormap;
     surface->raw = raw;
+    surface->argb = visual.visualid == argb_visual.visualid;
 
     if (!get_surface_rect( hwnd, &surface->rect, dpi )) goto failed;
     hwnd_thread_id = NtUserGetWindowThread(hwnd, &hwnd_pid);

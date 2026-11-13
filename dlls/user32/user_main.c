@@ -127,11 +127,105 @@ static NTSTATUS WINAPI User32RenderSynthesizedFormat( void *args, ULONG size )
     return STATUS_SUCCESS;
 }
 
+static BOOL path_contains( const WCHAR *path, const WCHAR *needle )
+{
+    size_t len = wcslen( needle );
+
+    for (; *path; path++)
+        if (!wcsnicmp( path, needle, len )) return TRUE;
+    return FALSE;
+}
+
+static BOOL dir_contains( const WCHAR *image, const WCHAR *name, const WCHAR *entry )
+{
+    WCHAR path[MAX_PATH];
+    size_t len = name - image;
+
+    if (len + wcslen( entry ) >= ARRAY_SIZE(path)) return FALSE;
+    memcpy( path, image, len * sizeof(WCHAR) );
+    wcscpy( path + len, entry );
+    return GetFileAttributesW( path ) != INVALID_FILE_ATTRIBUTES;
+}
+
+static BOOL use_x11_launcher_driver( const WCHAR *image, const WCHAR *name )
+{
+    WCHAR custom[MAX_PATH];
+    BOOL custom_is_path;
+    DWORD size;
+
+    size = GetEnvironmentVariableW( L"PROTON_USE_X11_EXCLUSIVE", custom, ARRAY_SIZE(custom) );
+    if (size && size < ARRAY_SIZE(custom))
+    {
+        custom_is_path = wcschr( custom, '\\' ) || wcschr( custom, '/' );
+        if ((!custom_is_path && !wcsicmp( name, custom )) ||
+            (custom_is_path && path_contains( image, custom )))
+            return TRUE;
+    }
+
+    if (!wcsicmp( name, L"UbisoftConnect.exe" ) ||
+        !wcsicmp( name, L"UbisoftGameLauncher.exe" ) ||
+        !wcsicmp( name, L"UbisoftGameLauncher64.exe" ) ||
+        !wcsicmp( name, L"upc.exe" ) ||
+        !wcsicmp( name, L"UplayWebCore.exe" ))
+        return TRUE;
+
+    if (path_contains( image, L"\\HoYoPlay\\" ) &&
+        !path_contains( image, L"\\HoYoPlay\\games\\" ))
+        return TRUE;
+
+    if (path_contains( image, L"\\GRYPHLINK\\" ) &&
+        !path_contains( image, L"\\GRYPHLINK\\games\\" ))
+        return TRUE;
+
+    if (path_contains( image, L"\\ArknightsEndfieldgowoU\\" ) &&
+        !path_contains( image, L"\\ArknightsEndfieldgowoU\\games\\" ))
+        return TRUE;
+
+    if (path_contains( image, L"\\Electronic Arts\\EA Desktop\\" ) ||
+        path_contains( image, L"\\Program Files (x86)\\Origin\\" ) ||
+        path_contains( image, L"\\Program Files\\Origin\\" ))
+        return TRUE;
+
+    if (!wcsicmp( name, L"nikke_launcher.exe" ) ||
+        !wcsicmp( name, L"tbs_browser.exe" ) ||
+        !wcsicmp( name, L"INTLWebViewHelper.exe" ) ||
+        !wcsicmp( name, L"msedgewebview2.exe" ))
+        return TRUE;
+
+    /* kuro launchers */
+    if (!wcsicmp( name, L"launcher_main.exe" ) &&
+        dir_contains( image, name, L"WebView2Loader.dll" ))
+        return TRUE;
+
+    return FALSE;
+}
+
 static NTSTATUS WINAPI User32LoadDriver( void *args, ULONG size )
 {
     const WCHAR *path = args;
+    const WCHAR *image = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+    const WCHAR *name = image, *p;
     UNICODE_STRING str;
     HMODULE module;
+    NTSTATUS status;
+
+    if ((p = wcsrchr( name, '\\' ))) name = p + 1;
+    if ((p = wcsrchr( name, '/' ))) name = p + 1;
+
+    /* These multi-process launcher UIs need X11's cross-process client
+     * surfaces. Keep games launched by them on the desktop's Wayland driver. */
+    if (!wcsicmp( path, L"winewayland.drv" ) && use_x11_launcher_driver( image, name ))
+    {
+        RtlInitUnicodeString( &str, L"winex11.drv" );
+        status = LdrLoadDll( L"c:\\windows\\system32", 0, &str, &module );
+        if (!status)
+        {
+            TRACE( "using winex11.drv for launcher process %s\n", debugstr_w(image) );
+            return status;
+        }
+        TRACE( "winex11.drv unavailable for launcher process %s, using winewayland.drv, status %#lx\n",
+               debugstr_w(image), status );
+    }
 
     RtlInitUnicodeString( &str, path );
     return LdrLoadDll( L"c:\\windows\\system32", 0, &str, &module );
@@ -320,9 +414,15 @@ int WINAPI RegisterServicesProcess(DWORD ServicesProcessId)
  */
 BOOL WINAPI ShutdownBlockReasonCreate(HWND hwnd, LPCWSTR reason)
 {
-    FIXME("(%p, %s): stub\n", hwnd, debugstr_w(reason));
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    TRACE("(%p, %s)\n", hwnd, debugstr_w(reason));
+
+    if (GetWindowThreadProcessId(hwnd, NULL) != GetCurrentThreadId())
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 /***********************************************************************
@@ -330,9 +430,15 @@ BOOL WINAPI ShutdownBlockReasonCreate(HWND hwnd, LPCWSTR reason)
  */
 BOOL WINAPI ShutdownBlockReasonDestroy(HWND hwnd)
 {
-    FIXME("(%p): stub\n", hwnd);
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    TRACE("(%p)\n", hwnd);
+
+    if (GetWindowThreadProcessId(hwnd, NULL) != GetCurrentThreadId())
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 const char *SPY_GetMsgName( UINT msg, HWND hwnd )

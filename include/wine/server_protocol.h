@@ -139,7 +139,7 @@ struct context_data
         struct { unsigned __int64 rax, rbx, rcx, rdx, rbp, rsi, rdi,
                                   r8, r9, r10, r11, r12, r13, r14, r15; } x86_64_regs;
         struct { unsigned int r[13]; } arm_regs;
-        struct { unsigned __int64 x[31]; } arm64_regs;
+        struct { unsigned __int64 x0[18], x19[12]; } arm64_regs;
     } integer;
     union
     {
@@ -173,16 +173,21 @@ struct context_data
     {
         struct { struct { unsigned __int64 low, high; } ymm_high[16]; } regs;
     } ymm;
+    union
+    {
+        unsigned __int64 arm64_x18;
+    } tls;
 };
 
-#define SERVER_CTX_CONTROL            0x01
-#define SERVER_CTX_INTEGER            0x02
-#define SERVER_CTX_SEGMENTS           0x04
-#define SERVER_CTX_FLOATING_POINT     0x08
-#define SERVER_CTX_DEBUG_REGISTERS    0x10
-#define SERVER_CTX_EXTENDED_REGISTERS 0x20
-#define SERVER_CTX_YMM_REGISTERS      0x40
-#define SERVER_CTX_EXEC_SPACE         0x80
+#define SERVER_CTX_CONTROL            0x0001
+#define SERVER_CTX_INTEGER            0x0002
+#define SERVER_CTX_SEGMENTS           0x0004
+#define SERVER_CTX_FLOATING_POINT     0x0008
+#define SERVER_CTX_DEBUG_REGISTERS    0x0010
+#define SERVER_CTX_EXTENDED_REGISTERS 0x0020
+#define SERVER_CTX_YMM_REGISTERS      0x0040
+#define SERVER_CTX_EXEC_SPACE         0x0080
+#define SERVER_CTX_TLS                0x0100
 
 
 struct send_fd
@@ -371,6 +376,14 @@ struct luid_attr
 {
     struct luid  luid;
     unsigned int attrs;
+};
+
+struct kernel_module_info
+{
+    client_ptr_t base;
+    mem_size_t   size;
+    data_size_t  name_len;
+
 };
 
 struct acl
@@ -1406,25 +1419,27 @@ struct set_thread_info_request
     int          priority;
     int          base_priority;
     affinity_t   affinity;
+    affinity_t   system_affinity;
     client_ptr_t entry_point;
     obj_handle_t token;
     int          disable_boost;
     unsigned int mask;
     /* VARARG(desc,unicode_str); */
-    char __pad_52[4];
+    char __pad_60[4];
 };
 struct set_thread_info_reply
 {
     struct reply_header __header;
 };
-#define SET_THREAD_INFO_PRIORITY        0x01
-#define SET_THREAD_INFO_BASE_PRIORITY   0x02
-#define SET_THREAD_INFO_AFFINITY        0x04
-#define SET_THREAD_INFO_TOKEN           0x08
-#define SET_THREAD_INFO_ENTRYPOINT      0x10
-#define SET_THREAD_INFO_DESCRIPTION     0x20
-#define SET_THREAD_INFO_DBG_HIDDEN      0x40
-#define SET_THREAD_INFO_DISABLE_BOOST   0x80
+#define SET_THREAD_INFO_PRIORITY        0x001
+#define SET_THREAD_INFO_BASE_PRIORITY   0x002
+#define SET_THREAD_INFO_AFFINITY        0x004
+#define SET_THREAD_INFO_GROUP_AFFINITY  0x008
+#define SET_THREAD_INFO_TOKEN           0x010
+#define SET_THREAD_INFO_ENTRYPOINT      0x020
+#define SET_THREAD_INFO_DESCRIPTION     0x040
+#define SET_THREAD_INFO_DBG_HIDDEN      0x080
+#define SET_THREAD_INFO_DISABLE_BOOST   0x100
 
 
 
@@ -5455,6 +5470,45 @@ struct set_kernel_object_ptr_reply
 };
 
 
+struct register_kernel_module_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+    client_ptr_t base;
+    mem_size_t   size;
+    /* VARARG(name,unicode_str); */
+};
+struct register_kernel_module_reply
+{
+    struct reply_header __header;
+};
+
+
+struct unregister_kernel_module_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+    client_ptr_t base;
+};
+struct unregister_kernel_module_reply
+{
+    struct reply_header __header;
+};
+
+
+struct list_kernel_modules_request
+{
+    struct request_header __header;
+    char __pad_12[4];
+};
+struct list_kernel_modules_reply
+{
+    struct reply_header __header;
+    unsigned int module_count;
+    data_size_t  info_size;
+    /* VARARG(info,kernel_module_info); */
+};
+
 
 struct grab_kernel_object_request
 {
@@ -5520,6 +5574,20 @@ struct grant_process_admin_token_request
     obj_handle_t handle;
 };
 struct grant_process_admin_token_reply
+{
+    struct reply_header __header;
+};
+
+
+
+struct set_process_session_request
+{
+    struct request_header __header;
+    obj_handle_t handle;
+    unsigned int session_id;
+    char __pad_20[4];
+};
+struct set_process_session_reply
 {
     struct reply_header __header;
 };
@@ -6550,11 +6618,15 @@ enum request
     REQ_get_next_device_request,
     REQ_get_kernel_object_ptr,
     REQ_set_kernel_object_ptr,
+    REQ_register_kernel_module,
+    REQ_unregister_kernel_module,
+    REQ_list_kernel_modules,
     REQ_grab_kernel_object,
     REQ_release_kernel_object,
     REQ_get_kernel_object_handle,
     REQ_make_process_system,
     REQ_grant_process_admin_token,
+    REQ_set_process_session,
     REQ_get_token_info,
     REQ_create_linked_token,
     REQ_create_completion,
@@ -6869,11 +6941,15 @@ union generic_request
     struct get_next_device_request_request get_next_device_request_request;
     struct get_kernel_object_ptr_request get_kernel_object_ptr_request;
     struct set_kernel_object_ptr_request set_kernel_object_ptr_request;
+    struct register_kernel_module_request register_kernel_module_request;
+    struct unregister_kernel_module_request unregister_kernel_module_request;
+    struct list_kernel_modules_request list_kernel_modules_request;
     struct grab_kernel_object_request grab_kernel_object_request;
     struct release_kernel_object_request release_kernel_object_request;
     struct get_kernel_object_handle_request get_kernel_object_handle_request;
     struct make_process_system_request make_process_system_request;
     struct grant_process_admin_token_request grant_process_admin_token_request;
+    struct set_process_session_request set_process_session_request;
     struct get_token_info_request get_token_info_request;
     struct create_linked_token_request create_linked_token_request;
     struct create_completion_request create_completion_request;
@@ -7186,11 +7262,15 @@ union generic_reply
     struct get_next_device_request_reply get_next_device_request_reply;
     struct get_kernel_object_ptr_reply get_kernel_object_ptr_reply;
     struct set_kernel_object_ptr_reply set_kernel_object_ptr_reply;
+    struct register_kernel_module_reply register_kernel_module_reply;
+    struct unregister_kernel_module_reply unregister_kernel_module_reply;
+    struct list_kernel_modules_reply list_kernel_modules_reply;
     struct grab_kernel_object_reply grab_kernel_object_reply;
     struct release_kernel_object_reply release_kernel_object_reply;
     struct get_kernel_object_handle_reply get_kernel_object_handle_reply;
     struct make_process_system_reply make_process_system_reply;
     struct grant_process_admin_token_reply grant_process_admin_token_reply;
+    struct set_process_session_reply set_process_session_reply;
     struct get_token_info_reply get_token_info_reply;
     struct create_linked_token_reply create_linked_token_reply;
     struct create_completion_reply create_completion_reply;
@@ -7239,6 +7319,6 @@ union generic_reply
     struct fsync_free_shm_idx_reply fsync_free_shm_idx_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 932
+#define SERVER_PROTOCOL_VERSION 934
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */

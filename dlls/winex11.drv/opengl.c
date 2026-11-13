@@ -1325,7 +1325,7 @@ static BOOL x11drv_pbuffer_create( HDC hdc, int format, BOOL largest, GLenum tex
     pglXQueryDrawable( gdi_display, gl->drawable, GLX_WIDTH, (unsigned int *)width );
     pglXQueryDrawable( gdi_display, gl->drawable, GLX_HEIGHT, (unsigned int *)height );
     SetRect( &rect, 0, 0, *width, *height );
-    set_dc_drawable( hdc, gl->drawable, &rect, IncludeInferiors );
+    set_dc_drawable( hdc, gl->drawable, &rect, IncludeInferiors, NULL );
 
     *drawable = &gl->base;
     return TRUE;

@@ -1611,6 +1611,33 @@ static void dump_varargs_monitor_infos( const char *prefix, data_size_t size )
     remove_data( size );
 }
 
+static void dump_varargs_kernel_module_info( const char *prefix, data_size_t size )
+{
+    fprintf( stderr,"%s{", prefix );
+    while (size)
+    {
+        const struct kernel_module_info *info = cur_data;
+        data_size_t len;
+
+        if (size < sizeof(*info)) break;
+        len = (sizeof(*info) + info->name_len + sizeof(client_ptr_t)-1)
+               / sizeof(client_ptr_t) * sizeof(client_ptr_t);
+        if (size < len) break;
+
+        dump_uint64( "{base=", &info->base );
+        dump_uint64( ",size=", &info->size );
+        fprintf( stderr, ",name=L\"" );
+
+        dump_strW( (const WCHAR *)(info + 1), info->name_len, stderr, "\"\"" );
+        fprintf( stderr, "\"}" );
+
+        size -= len;
+        remove_data( len );
+        if (size)fputc( ',', stderr );
+    }
+    fputc( '}', stderr );
+}
+
 void trace_request(void)
 {
     enum request req = current->req.request_header.req;

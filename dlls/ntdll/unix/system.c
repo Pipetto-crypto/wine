@@ -3870,13 +3870,38 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
         {
             "\\SystemRoot\\system32\\ntoskrnl.exe",
             "\\SystemRoot\\system32\\hal.dll",
-            "\\SystemRoot\\system32\\drivers\\mountmgr.sys"
         };
 
-        ULONG i;
-        RTL_PROCESS_MODULES *smi = info;
+        static const char driver_prefix[] = "\\SystemRoot\\system32\\drivers\\";
 
-        len = offsetof( RTL_PROCESS_MODULES, Modules[ARRAY_SIZE(fake_modules)] );
+        ULONG i, count;
+        RTL_PROCESS_MODULES *smi = info;
+        char *buffer = NULL;
+        data_size_t buffer_size = 0, pos = 0;
+        unsigned int module_count = 0;
+
+        /* query with no buffer first, the reply tells us how much is needed */
+        SERVER_START_REQ( list_kernel_modules )
+        {
+            wine_server_set_reply( req, NULL, 0 );
+            if (wine_server_call( req ) == STATUS_INFO_LENGTH_MISMATCH)
+                buffer_size = reply->info_size;
+        }
+        SERVER_END_REQ;
+
+        if (buffer_size && (buffer = malloc( buffer_size )))
+        {
+            SERVER_START_REQ( list_kernel_modules )
+            {
+                wine_server_set_reply( req, buffer, buffer_size );
+                if (!wine_server_call( req )) module_count = reply->module_count;
+                else buffer_size = 0;
+            }
+            SERVER_END_REQ;
+        }
+
+        count = ARRAY_SIZE(fake_modules) + module_count;
+        len = offsetof( RTL_PROCESS_MODULES, Modules[count] );
         if (len <= size)
         {
             memset( smi, 0, len );
@@ -3890,10 +3915,34 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
                 strcpy( (char *)sm->Name, fake_modules[i] );
                 sm->NameOffset = strrchr( fake_modules[i], '\\' ) - fake_modules[i] + 1;
             }
-            smi->ModulesCount = i;
+            for (i = 0; i < module_count; i++)
+            {
+                const struct kernel_module_info *km = (const struct kernel_module_info *)(buffer + pos);
+                RTL_PROCESS_MODULE_INFORMATION *sm = &smi->Modules[ARRAY_SIZE(fake_modules) + i];
+                const WCHAR *module_name = (const WCHAR *)(km + 1);
+                unsigned int name_chars = km->name_len / sizeof(WCHAR);
+                unsigned int written = sizeof(driver_prefix) - 1;
+                unsigned int src;
+
+                sm->ImageBaseAddress = wine_server_get_ptr( km->base );
+                sm->ImageSize = km->size;
+                sm->LoadOrderIndex = ARRAY_SIZE(fake_modules) + i;
+                sm->LoadCount = 1;
+
+                strcpy( (char *)sm->Name, driver_prefix );
+                for (src = 0; src < name_chars && written < MAXIMUM_FILENAME_LENGTH - 5; src++)
+                    sm->Name[written++] = (char)module_name[src];
+                strcpy( (char *)sm->Name + written, ".sys" );
+                sm->NameOffset = sizeof(driver_prefix) - 1;
+
+                pos += (sizeof(*km) + km->name_len + sizeof(client_ptr_t)-1)
+                       / sizeof(client_ptr_t) * sizeof(client_ptr_t);
+            }
+            smi->ModulesCount = count;
         }
         else ret = STATUS_INFO_LENGTH_MISMATCH;
 
+        free( buffer );
         break;
     }
 

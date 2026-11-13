@@ -367,8 +367,10 @@ struct x11drv_escape_get_drawable
 };
 
 extern BOOL needs_offscreen_rendering( HWND hwnd );
-extern void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode );
+extern void set_dc_drawable( HDC hdc, Drawable drawable, const RECT *rect, int mode, const XVisualInfo *vis );
 extern Drawable get_dc_drawable( HDC hdc, RECT *rect );
+extern XVisualInfo get_other_process_visual( HWND hwnd );
+extern BOOL is_gryphlink_launcher(void);
 extern HRGN get_dc_monitor_region( HWND hwnd, HDC hdc );
 extern Window x11drv_client_surface_create( HWND hwnd, BOOL raw, int format, struct client_surface **client );
 

@@ -845,6 +845,9 @@ static void test_query_module(void)
         /* module->ImageBaseAddress is not set on wow64 or arm64 */
         ok(module->ImageSize, "%lu: got 0 size\n", i);
         ok(module->LoadCount, "%lu: got 0 load count\n", i);
+        ok(module->Name[0], "%lu: got empty name\n", i);
+        ok(module->NameOffset < strlen((const char *)module->Name),
+           "%lu: got NameOffset %u for %s\n", i, module->NameOffset, module->Name);
     }
 
     free(info);

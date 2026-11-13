@@ -268,11 +268,15 @@ DECL_HANDLER(delete_device);
 DECL_HANDLER(get_next_device_request);
 DECL_HANDLER(get_kernel_object_ptr);
 DECL_HANDLER(set_kernel_object_ptr);
+DECL_HANDLER(register_kernel_module);
+DECL_HANDLER(unregister_kernel_module);
+DECL_HANDLER(list_kernel_modules);
 DECL_HANDLER(grab_kernel_object);
 DECL_HANDLER(release_kernel_object);
 DECL_HANDLER(get_kernel_object_handle);
 DECL_HANDLER(make_process_system);
 DECL_HANDLER(grant_process_admin_token);
+DECL_HANDLER(set_process_session);
 DECL_HANDLER(get_token_info);
 DECL_HANDLER(create_linked_token);
 DECL_HANDLER(create_completion);
@@ -584,11 +588,15 @@ static const req_handler req_handlers[REQ_NB_REQUESTS] =
     (req_handler)req_get_next_device_request,
     (req_handler)req_get_kernel_object_ptr,
     (req_handler)req_set_kernel_object_ptr,
+    (req_handler)req_register_kernel_module,
+    (req_handler)req_unregister_kernel_module,
+    (req_handler)req_list_kernel_modules,
     (req_handler)req_grab_kernel_object,
     (req_handler)req_release_kernel_object,
     (req_handler)req_get_kernel_object_handle,
     (req_handler)req_make_process_system,
     (req_handler)req_grant_process_admin_token,
+    (req_handler)req_set_process_session,
     (req_handler)req_get_token_info,
     (req_handler)req_create_linked_token,
     (req_handler)req_create_completion,
@@ -2161,6 +2169,15 @@ C_ASSERT( offsetof(struct set_kernel_object_ptr_request, manager) == 12 );
 C_ASSERT( offsetof(struct set_kernel_object_ptr_request, handle) == 16 );
 C_ASSERT( offsetof(struct set_kernel_object_ptr_request, user_ptr) == 24 );
 C_ASSERT( sizeof(struct set_kernel_object_ptr_request) == 32 );
+C_ASSERT( offsetof(struct register_kernel_module_request, base) == 16 );
+C_ASSERT( offsetof(struct register_kernel_module_request, size) == 24 );
+C_ASSERT( sizeof(struct register_kernel_module_request) == 32 );
+C_ASSERT( offsetof(struct unregister_kernel_module_request, base) == 16 );
+C_ASSERT( sizeof(struct unregister_kernel_module_request) == 24 );
+C_ASSERT( sizeof(struct list_kernel_modules_request) == 16 );
+C_ASSERT( offsetof(struct list_kernel_modules_reply, module_count) == 8 );
+C_ASSERT( offsetof(struct list_kernel_modules_reply, info_size) == 12 );
+C_ASSERT( sizeof(struct list_kernel_modules_reply) == 16 );
 C_ASSERT( offsetof(struct grab_kernel_object_request, manager) == 12 );
 C_ASSERT( offsetof(struct grab_kernel_object_request, user_ptr) == 16 );
 C_ASSERT( sizeof(struct grab_kernel_object_request) == 24 );
@@ -2180,6 +2197,9 @@ C_ASSERT( offsetof(struct make_process_system_reply, event) == 8 );
 C_ASSERT( sizeof(struct make_process_system_reply) == 16 );
 C_ASSERT( offsetof(struct grant_process_admin_token_request, handle) == 12 );
 C_ASSERT( sizeof(struct grant_process_admin_token_request) == 16 );
+C_ASSERT( offsetof(struct set_process_session_request, handle) == 12 );
+C_ASSERT( offsetof(struct set_process_session_request, session_id) == 16 );
+C_ASSERT( sizeof(struct set_process_session_request) == 24 );
 C_ASSERT( offsetof(struct get_token_info_request, handle) == 12 );
 C_ASSERT( sizeof(struct get_token_info_request) == 16 );
 C_ASSERT( offsetof(struct get_token_info_reply, token_id) == 8 );

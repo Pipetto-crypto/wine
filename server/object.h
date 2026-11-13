@@ -161,6 +161,8 @@ extern void *open_named_object( struct object *parent, const struct object_ops *
 extern void unlink_named_object( struct object *obj );
 extern struct namespace *create_namespace( unsigned int hash_size );
 extern void free_kernel_objects( struct object *obj );
+extern void free_kernel_modules( struct process *process );
+extern void unregister_process_kernel_modules( struct process *process );
 /* grab/release_object can take any pointer, but you better make sure */
 /* that the thing pointed to starts with a struct object... */
 extern struct object *grab_object( void *obj );

@@ -1,0 +1,6 @@
+MODULE  = wdf01000.sys
+IMPORTS = wdfldr.sys
+
+EXTRADLLFLAGS = -Wl,--subsystem,native
+
+SOURCES = main.c

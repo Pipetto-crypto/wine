@@ -77,6 +77,7 @@ extern const struct acl *token_get_default_dacl( struct token *token );
 extern const struct sid *token_get_owner( struct token *token );
 extern const struct sid *token_get_primary_group( struct token *token );
 extern unsigned int token_get_session_id( struct token *token );
+extern void token_set_session_id( struct token *token, unsigned int session_id );
 extern int token_sid_present( struct token *token, const struct sid *sid, int deny );
 
 static inline struct ace *ace_first( const struct acl *acl )

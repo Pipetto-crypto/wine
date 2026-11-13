@@ -1675,9 +1675,6 @@ static void xrender_stretch_blit( struct xrender_physdev *physdev_src, struct xr
     }
     else /* color -> color (can be at different depths) or mono -> mono */
     {
-        if (physdev_dst->pict_format->depth == 32 && physdev_src->pict_format->depth < 32)
-            mask_pict = get_no_alpha_mask();
-
         xrender_blit( PictOpSrc, src_pict, mask_pict, dst_pict,
                       physdev_src->x11dev->dc_rect.left + src->x,
                       physdev_src->x11dev->dc_rect.top + src->y,
