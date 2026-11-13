@@ -1034,6 +1034,25 @@ static void add_system_dll_path_var( WCHAR **env, SIZE_T *pos, SIZE_T *size )
 }
 
 
+static void wuwa_fixup_steamos_env( WCHAR **env, SIZE_T *pos, SIZE_T *size )
+{
+    static const WCHAR steamosW[] = u"SteamOS";
+    static int is_wuwa = -1;
+
+    if (is_wuwa == -1)
+    {
+        const char *sgi = getenv( "SteamGameId" );
+        is_wuwa = sgi && !strcmp( sgi, "3513350" ) && !getenv( "SteamOS" );
+    }
+    if (!is_wuwa) return;
+
+    if (main_argc > 1 && (strstr( main_argv[1], "\\launcher.exe" ) || strstr( main_argv[1], "\\launcher_main.exe" )))
+        set_env_var( env, pos, size, steamosW, ARRAY_SIZE(steamosW) - 1, u"1" );
+    else
+        set_env_var( env, pos, size, steamosW, ARRAY_SIZE(steamosW) - 1, NULL );
+}
+
+
 /*************************************************************************
  *		add_dynamic_environment
  *
@@ -1074,6 +1093,8 @@ static void add_dynamic_environment( WCHAR **env, SIZE_T *pos, SIZE_T *size )
 
     if ((var = getenv( "VR_CONFIG_PATH" ))) add_path_var( env, pos, size, "VR_CONFIG_PATH", var );
     if ((var = getenv( "VR_LOG_PATH" ))) add_path_var( env, pos, size, "VR_LOG_PATH", var );
+
+    wuwa_fixup_steamos_env( env, pos, size );
 }
 
 
