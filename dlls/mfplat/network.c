@@ -2012,5 +2012,3 @@ error:
         hr = MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
     return hr;
 }
-2.45.2
-
