@@ -660,6 +660,15 @@ void wg_format_from_caps(struct wg_format *format, const GstCaps *caps)
         if (!strcmp(name, container_caps[i]))
             return;
 
+    /* mpegpsdemux advertises the whole program stream on its sink pad as
+     * video/mpeg,systemstream=true. It is a container, not a video stream,
+     * and has none of the width/height/codec_data fields that
+     * wg_format_from_caps_video_mpeg1() needs. Likewise the elementary
+     * streams it exposes before typefinding completes are deliberately left
+     * unmapped; the parser re-queries once the pads carry parsed caps. */
+    if (!strcmp(name, "video/mpeg") && gst_structure_get_boolean(structure, "systemstream", &parsed) && parsed)
+        return;
+
     if (!strcmp(name, "audio/x-raw"))
     {
         GstAudioInfo info;
