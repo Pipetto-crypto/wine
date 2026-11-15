@@ -23,6 +23,7 @@
 #include "mfapi.h"
 #include "mferror.h"
 #include "dxva2api.h"
+#include "winuser.h"
 
 #include "evr_classes.h"
 #include "evr_private.h"
@@ -109,6 +110,12 @@ struct video_presenter
     LONGLONG frame_time_threshold;
     UINT reset_token;
     HWND video_window;
+    /* Hidden window used as the d3d device window until the application
+     * supplies the real one through SetVideoWindow(). Creating the device
+     * against GetDesktopWindow() makes DXVK map a visible top-level window
+     * onto the desktop for a moment, which shows up as a fullscreen window
+     * flashing on screen before SetVideoWindow() arrives. */
+    HWND host_window;
     MFVideoNormalizedRect src_rect;
     RECT dst_rect;
     DWORD rendering_prefs;
@@ -896,6 +903,8 @@ static ULONG WINAPI video_presenter_inner_Release(IUnknown *iface)
         }
         if (presenter->allocator)
             IMFVideoSampleAllocator_Release(presenter->allocator);
+        if (presenter->host_window)
+            DestroyWindow(presenter->host_window);
         free(presenter);
     }
 
@@ -1461,11 +1470,12 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
         presenter->video_window = window;
 
         /* The device was created before we knew the real window, so it is
-         * bound to the desktop. Recreate it once, now that the destination
-         * window is known, and hand the new device to the manager before
-         * building the swapchain on top of it. Without this the direct3d
-         * swapchain stays associated with the desktop window and DXVK
-         * renders the video into a separate top-level window. */
+         * attached to the hidden host window. Recreate it once, now that
+         * the destination window is known, and hand the new device to the
+         * manager before building the swapchain on top of it. The device
+         * window cannot be changed after creation, and a device attached to
+         * the wrong window makes DXVK render into a separate top-level
+         * window instead of the game's. */
         if (!had_device_window)
         {
             /* init_d3d() overwrites presenter->allocator without releasing
@@ -1480,6 +1490,12 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
             hr = video_presenter_init_d3d(presenter);
             if (FAILED(hr))
                 WARN("Failed to recreate d3d device for %p, hr %#lx.\n", window, hr);
+
+            if (presenter->host_window)
+            {
+                DestroyWindow(presenter->host_window);
+                presenter->host_window = NULL;
+            }
         }
 
         if (SUCCEEDED(hr))
@@ -2168,8 +2184,19 @@ HRESULT WINAPI MFCreateVideoPresenter(IUnknown *owner, REFIID riid_device, REFII
     return CoCreateInstance(&CLSID_MFVideoPresenter9, owner, CLSCTX_INPROC_SERVER, riid, obj);
 }
 
+/* Create a hidden window to host the d3d device before the real video
+ * window is known. It must be a real HWND because wined3d attaches its
+ * swapchain to the device window, but it stays invisible so nothing flashes
+ * on screen. */
+static HWND video_presenter_create_host_window(void)
+{
+    return CreateWindowExW(0, L"static", L"", WS_POPUP, 0, 0, 1, 1,
+            NULL, NULL, NULL, NULL);
+}
+
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 {
+
     D3DPRESENT_PARAMETERS present_params = { 0 };
     IDirect3DDevice9 *device;
     IDirect3D9 *d3d;
@@ -2177,12 +2204,16 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HRESULT hr;
 
     /* Present into the window the application gave us in SetVideoWindow().
-     * Creating the device against GetDesktopWindow() makes the swapchain
-     * belong to the desktop: with DXVK and turnip that shows up as a second
-     * top-level window with the same title as the game, showing the video
-     * while the real game window stays black. Fall back to the desktop only
-     * before SetVideoWindow() has been called. */
-    window = presenter->video_window ? presenter->video_window : GetDesktopWindow();
+     * Before that call arrives, use a hidden host window rather than the
+     * desktop: the device window is fixed at creation time, and a
+     * desktop-attached device makes DXVK flash a fullscreen window before
+     * SetVideoWindow() recreates the device for the real target. */
+    if (presenter->video_window)
+        window = presenter->video_window;
+    else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
+        window = presenter->host_window;
+    else
+        window = GetDesktopWindow();
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
