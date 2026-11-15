@@ -1071,6 +1071,26 @@ static HRESULT topology_loader_connect_d3d_aware_sink(IMFTopology *topology,
             IMFTransform_Release(transform);
         }
 
+        /* sample_copier only implements video. Inserting it in front of an
+         * audio sink makes SetInputType fail with E_NOTIMPL, so restrict it
+         * to streams whose current type is video. */
+        if (needs_copier)
+        {
+            IMFMediaType *up_type;
+
+            if (SUCCEEDED(MFGetTopoNodeCurrentType(upstream_node, upstream_output, TRUE, &up_type)))
+            {
+                GUID major = { 0 };
+
+                IMFMediaType_GetMajorType(up_type, &major);
+                if (!IsEqualGUID(&major, &MFMediaType_Video))
+                    needs_copier = FALSE;
+                IMFMediaType_Release(up_type);
+            }
+            else
+                needs_copier = FALSE;
+        }
+
         if (needs_copier && SUCCEEDED(hr = topology_loader_create_copier(upstream_node, upstream_output, node, 0, &copier)))
         {
             hr = topology_loader_connect_copier(topology, upstream_node, upstream_output, node, 0, copier);
