@@ -719,6 +719,17 @@ void wg_format_from_caps(struct wg_format *format, const GstCaps *caps)
     {
         wg_format_from_caps_video_mpeg1(format, caps);
     }
+    else if (!strcmp(name, "video/mpeg")
+            && gst_structure_get_int(structure, "mpegversion", &version) && (version == 1 || version == 2))
+    {
+        /* Elementary MPEG-1/2 video before typefinding has no width, height,
+         * framerate or codec_data, so wg_format_from_caps_video_mpeg1()
+         * cannot fill anything in. It is still MPEG video though: reporting
+         * it as unknown makes wg_parser_stream_get_codec_format() lose the
+         * stream type, which in turn prevents the parser from offering a
+         * compressed MPEG1Payload media type to the application. */
+        format->major_type = WG_MAJOR_TYPE_VIDEO_MPEG1;
+    }
     else if (!strcmp(name, "video/x-h264"))
     {
         wg_format_from_caps_video_h264(format, caps);
