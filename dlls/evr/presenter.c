@@ -533,6 +533,8 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
         else
             WARN("Failed to get a backbuffer, hr %#lx.\n", hr);
     }
+    else
+        WARN("No swapchain, dropping presented sample.\n");
 
     IMFSample_AddRef(sample);
     if ((sample = InterlockedExchangePointer((void **)&queue->last_presented, sample)))
@@ -645,6 +647,7 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
         if (FAILED(hr = IMFTransform_ProcessOutput(presenter->mixer, 0, 1, &buffer, &status)))
         {
             /* FIXME: failure path probably needs to handle some errors specifically */
+            WARN("Failed to process output, hr %#lx.\n", hr);
             presenter->flags &= ~PRESENTER_MIXER_HAS_INPUT;
             IMFSample_Release(sample);
             break;
@@ -1474,16 +1477,24 @@ static HRESULT WINAPI video_presenter_control_GetVideoWindow(IMFVideoDisplayCont
 static HRESULT WINAPI video_presenter_control_RepaintVideo(IMFVideoDisplayControl *iface)
 {
     struct video_presenter *presenter = impl_from_IMFVideoDisplayControl(iface);
-    HRESULT hr;
+    IMFSample *sample;
+    HRESULT hr = S_OK;
 
-    FIXME("%p.\n", iface);
+    TRACE("%p.\n", iface);
 
     EnterCriticalSection(&presenter->cs);
 
     if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
         hr = MF_E_SHUTDOWN;
-    else
-        hr = E_NOTIMPL;
+    else if ((sample = presenter->thread.queue.last_presented))
+    {
+        /* Games that drive their own presentation loop call this on every
+         * iteration. Returning E_NOTIMPL leaves the window black after the
+         * swapchain is recreated or the desktop is invalidated. */
+        IMFSample_AddRef(sample);
+        video_presenter_sample_present(presenter, sample);
+        IMFSample_Release(sample);
+    }
 
     LeaveCriticalSection(&presenter->cs);
 

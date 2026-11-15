@@ -35,6 +35,8 @@
 WINE_DEFAULT_DEBUG_CHANNEL(dxva2);
 
 #define D3DFMT_NV12 MAKEFOURCC('N','V','1','2')
+#define D3DFMT_I420 MAKEFOURCC('I','4','2','0')
+#define D3DFMT_YV12 MAKEFOURCC('Y','V','1','2')
 
 enum device_handle_flags
 {
@@ -442,14 +444,18 @@ struct dxva_processor_device_desc
     const D3DFORMAT *input_formats;
 };
 
+/* Software decoders (libav) commonly output planar 4:2:0 as I420 or YV12.
+ * Leaving those out makes GetVideoProcessorDeviceGuids() fail for the
+ * whole stream, so the EVR mixer never collects any output types and the
+ * picture stays black even though frames are being decoded. */
 static const D3DFORMAT software_processor_input_formats[] =
 {
-    D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, D3DFMT_YUY2, 0
+    D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, D3DFMT_YUY2, D3DFMT_I420, D3DFMT_YV12, 0
 };
 
 static const D3DFORMAT progressive_processor_input_formats[] =
 {
-    D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, D3DFMT_YUY2, D3DFMT_NV12, 0
+    D3DFMT_A8R8G8B8, D3DFMT_X8R8G8B8, D3DFMT_YUY2, D3DFMT_NV12, D3DFMT_I420, D3DFMT_YV12, 0
 };
 
 static const struct dxva_processor_device_desc processor_devices[] =
