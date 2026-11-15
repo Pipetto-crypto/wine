@@ -1883,6 +1883,28 @@ static HRESULT get_raw_media_type(struct wg_format *format, unsigned int index, 
     return VFW_S_NO_MORE_ITEMS;
 }
 
+static bool parser_source_use_mpeg1_payload(void)
+{
+    const char *sgi, *flag;
+
+    /* Proton has a game-specific hack for Making Lovers (Steam AppID
+     * 1200720): offer MEDIASUBTYPE_MPEG1Payload as the first media type so
+     * the game receives the compressed MPEG stream and decodes it itself.
+     * Going through decodebin instead produces planar I420/YV12, which the
+     * DirectShow EVR cannot render (evr_render() only accepts ARGB32/RGB32/
+     * YUY2/NV12), leaving the window black and the graph rebuilding itself.
+     *
+     * Keep the same automatic trigger, but also allow an explicit opt-in so
+     * this works outside Steam and for other MPEG-PS based openings. It is
+     * opt-in because forcing compressed output changes the format for every
+     * video stream of the process. */
+    if ((sgi = getenv("SteamGameId")) && !strcmp(sgi, "1200720"))
+        return true;
+    if ((flag = getenv("WINE_GST_MPEG1_OP")) && strcmp(flag, "0"))
+        return true;
+    return false;
+}
+
 static HRESULT decodebin_parser_source_get_media_type(struct parser_source *pin,
         unsigned int index, AM_MEDIA_TYPE *mt)
 {
@@ -1891,6 +1913,19 @@ static HRESULT decodebin_parser_source_get_media_type(struct parser_source *pin,
     TRACE("pin %p, index %d, mt %p.\n", pin, (int)index, mt);
 
     wg_parser_stream_get_current_format(pin->wg_stream, &format);
+
+    if (format.major_type == WG_MAJOR_TYPE_VIDEO && parser_source_use_mpeg1_payload())
+    {
+        if (!index)
+        {
+            format.major_type = WG_MAJOR_TYPE_VIDEO_MPEG1;
+            if (!amt_from_wg_format(mt, &format, false))
+                return E_OUTOFMEMORY;
+            return S_OK;
+        }
+        --index;
+    }
+
     return get_raw_media_type(&format, index, mt);
 }
 
