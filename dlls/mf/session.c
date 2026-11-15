@@ -171,6 +171,7 @@ struct transform_stream
 {
     struct list samples;
     unsigned int requests;
+    unsigned int diag_no_request_warns;
     BOOL raw_audio;
     unsigned int block_alignment;
     unsigned int bytes_per_second;
@@ -229,6 +230,7 @@ struct topo_node
             unsigned int output_count;
 
             BOOL async;
+            unsigned int diag_pull_warns;
             IMFMediaEventGenerator *event_source;
         } transform;
     } u;
@@ -3875,6 +3877,9 @@ static HRESULT transform_node_pull_samples(const struct media_session *session, 
     }
     while (hr == S_OK && transform_node_markin_need_more_input(session, node, buffers));
 
+    if (FAILED(hr) && node->u.transform.diag_pull_warns++ < 3)
+        WARN("pull_samples: ProcessOutput returned %#lx, samples will be discarded.\n", hr);
+
     /* Collect returned samples for all streams. */
     for (i = 0; i < node->u.transform.output_count; ++i)
     {
@@ -4081,6 +4086,9 @@ static void transform_node_deliver_samples(struct media_session *session, struct
             WARN("Failed to node %p/%lu output\n", topo_node, output);
             continue;
         }
+
+        if (!stream->requests && stream->diag_no_request_warns++ < 3)
+            WARN("deliver_samples: node %p output %lu has no pending requests.\n", topo_node, output);
 
         while (stream->requests)
         {
