@@ -925,6 +925,16 @@ NTSTATUS caps_to_media_type(GstCaps *caps, struct wg_media_type *media_type, UIN
             return video_format_from_gst_caps(caps, NULL, media_type->u.video, &media_type->format_size, video_plane_align);
         if (!strcmp(name, "video/x-cinepak"))
             return video_format_from_gst_caps(caps, &MFVideoFormat_CVID, media_type->u.video, &media_type->format_size, video_plane_align);
+        if (!strcmp(name, "video/x-h264"))
+            return video_format_from_gst_caps(caps, &MFVideoFormat_H264, media_type->u.video, &media_type->format_size, video_plane_align);
+        if (!strcmp(name, "video/x-av1"))
+            return video_format_from_gst_caps(caps, &MFVideoFormat_AV1, media_type->u.video, &media_type->format_size, video_plane_align);
+        if (!strcmp(name, "video/x-vp9"))
+            return video_format_from_gst_caps(caps, &MFVideoFormat_VP90, media_type->u.video, &media_type->format_size, video_plane_align);
+        if (!strcmp(name, "video/x-theora"))
+            return video_format_from_gst_caps(caps, &MFVideoFormat_theora, media_type->u.video, &media_type->format_size, video_plane_align);
+        if (!strcmp(name, "video/x-indeo"))
+            return video_format_from_gst_caps(caps, &MFVideoFormat_IV50, media_type->u.video, &media_type->format_size, video_plane_align);
         if (!strcmp(name, "video/x-wmv"))
             return wmv_video_format_from_gst_caps(caps, media_type->u.video, &media_type->format_size, video_plane_align);
         if (!strcmp(name, "video/mpeg") && gst_structure_get_boolean(structure, "parsed", &parsed) && parsed)
