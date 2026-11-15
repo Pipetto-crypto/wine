@@ -127,6 +127,8 @@ struct video_presenter
     CRITICAL_SECTION cs;
 };
 
+static HRESULT video_presenter_init_d3d(struct video_presenter *presenter);
+
 static struct video_presenter *impl_from_IUnknown(IUnknown *iface)
 {
     return CONTAINING_RECORD(iface, struct video_presenter, IUnknown_inner);
@@ -1451,11 +1453,37 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
     EnterCriticalSection(&presenter->cs);
     if (presenter->video_window != window)
     {
+        BOOL had_device_window = presenter->video_window != NULL;
+
         if (presenter->swapchain)
             IDirect3DSwapChain9_Release(presenter->swapchain);
         presenter->swapchain = NULL;
         presenter->video_window = window;
-        hr = video_presenter_create_swapchain(presenter);
+
+        /* The device was created before we knew the real window, so it is
+         * bound to the desktop. Recreate it once, now that the destination
+         * window is known, and hand the new device to the manager before
+         * building the swapchain on top of it. Without this the direct3d
+         * swapchain stays associated with the desktop window and DXVK
+         * renders the video into a separate top-level window. */
+        if (!had_device_window)
+        {
+            /* init_d3d() overwrites presenter->allocator without releasing
+             * the previous one, so drop it here first. */
+            if (presenter->allocator)
+            {
+                IMFVideoSampleAllocator_UninitializeSampleAllocator(presenter->allocator);
+                video_presenter_set_allocator_callback(presenter, NULL);
+                IMFVideoSampleAllocator_Release(presenter->allocator);
+                presenter->allocator = NULL;
+            }
+            hr = video_presenter_init_d3d(presenter);
+            if (FAILED(hr))
+                WARN("Failed to recreate d3d device for %p, hr %#lx.\n", window, hr);
+        }
+
+        if (SUCCEEDED(hr))
+            hr = video_presenter_create_swapchain(presenter);
     }
     LeaveCriticalSection(&presenter->cs);
 
@@ -2145,7 +2173,16 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     D3DPRESENT_PARAMETERS present_params = { 0 };
     IDirect3DDevice9 *device;
     IDirect3D9 *d3d;
+    HWND window;
     HRESULT hr;
+
+    /* Present into the window the application gave us in SetVideoWindow().
+     * Creating the device against GetDesktopWindow() makes the swapchain
+     * belong to the desktop: with DXVK and turnip that shows up as a second
+     * top-level window with the same title as the game, showing the video
+     * while the real game window stays black. Fall back to the desktop only
+     * before SetVideoWindow() has been called. */
+    window = presenter->video_window ? presenter->video_window : GetDesktopWindow();
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
@@ -2156,11 +2193,11 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 
     present_params.BackBufferCount = 1;
     present_params.SwapEffect = D3DSWAPEFFECT_COPY;
-    present_params.hDeviceWindow = GetDesktopWindow();
+    present_params.hDeviceWindow = window;
     present_params.Windowed = TRUE;
     present_params.Flags = D3DPRESENTFLAG_VIDEO;
     present_params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
-    hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, GetDesktopWindow(),
+    hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
             D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED, &present_params, &device);
 
     IDirect3D9_Release(d3d);
