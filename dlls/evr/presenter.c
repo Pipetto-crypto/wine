@@ -646,7 +646,19 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
 
         if (FAILED(hr = IMFTransform_ProcessOutput(presenter->mixer, 0, 1, &buffer, &status)))
         {
-            /* FIXME: failure path probably needs to handle some errors specifically */
+            /* The mixer returns MF_E_TRANSFORM_NEED_MORE_INPUT after it has
+             * rendered the current input and is waiting for the next one.
+             * This is a normal condition, not an error: treating it as a
+             * failure clears PRESENTER_MIXER_HAS_INPUT and makes the
+             * presenter stop asking for output, so the game loops forever
+             * on EC_SAMPLE_NEEDED with no frame ever presented. Just
+             * release the scratch sample and leave the input flag alone,
+             * so the next ProcessInput notification can drive the mixer. */
+            if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
+            {
+                IMFSample_Release(sample);
+                break;
+            }
             WARN("Failed to process output, hr %#lx.\n", hr);
             presenter->flags &= ~PRESENTER_MIXER_HAS_INPUT;
             IMFSample_Release(sample);
@@ -669,6 +681,11 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
             video_presenter_schedule_sample(presenter, sample);
 
             IMFSample_Release(sample);
+
+            /* The mixer produces at most one output sample per input. Do not
+             * drain it again in this same loop; wait for the next
+             * PROCESSINPUTNOTIFY instead. */
+            break;
         }
     }
 
