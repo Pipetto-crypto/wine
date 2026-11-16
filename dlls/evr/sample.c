@@ -1343,9 +1343,15 @@ static HRESULT WINAPI video_sample_GetBufferByIndex(IMFSample *iface, DWORD inde
 
 static HRESULT WINAPI video_sample_ConvertToContiguousBuffer(IMFSample *iface, IMFMediaBuffer **buffer)
 {
+    struct video_sample *sample = impl_from_IMFSample(iface);
+
     TRACE("%p, %p.\n", iface, buffer);
 
-    return E_NOTIMPL;
+    /* This sample wraps a D3D surface backed buffer. Callers such as
+     * wg_sample_create_mf() need the underlying buffer so that they can lock
+     * it as a 2D buffer and decode straight into the surface; returning
+     * E_NOTIMPL here made every decoded frame be dropped. */
+    return IMFSample_ConvertToContiguousBuffer(sample->sample, buffer);
 }
 
 static HRESULT WINAPI video_sample_AddBuffer(IMFSample *iface, IMFMediaBuffer *buffer)
@@ -1386,9 +1392,11 @@ static HRESULT WINAPI video_sample_GetTotalLength(IMFSample *iface, DWORD *total
 
 static HRESULT WINAPI video_sample_CopyToBuffer(IMFSample *iface, IMFMediaBuffer *buffer)
 {
+    struct video_sample *sample = impl_from_IMFSample(iface);
+
     TRACE("%p, %p.\n", iface, buffer);
 
-    return E_NOTIMPL;
+    return IMFSample_CopyToBuffer(sample->sample, buffer);
 }
 
 static const IMFSampleVtbl video_sample_vtbl =
