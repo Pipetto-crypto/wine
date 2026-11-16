@@ -1460,6 +1460,7 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
         return E_INVALIDARG;
 
     EnterCriticalSection(&presenter->cs);
+    WARN("SetVideoWindow %p, previous %p, swapchain %p.\n", window, presenter->video_window, presenter->swapchain);
     if (presenter->video_window != window)
     {
         BOOL had_device_window = presenter->video_window != NULL;
@@ -2214,6 +2215,9 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
         window = presenter->host_window;
     else
         window = GetDesktopWindow();
+
+    WARN("init_d3d: video_window %p, host_window %p, using %p.\n",
+            presenter->video_window, presenter->host_window, window);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
