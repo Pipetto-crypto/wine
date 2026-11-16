@@ -135,6 +135,12 @@ struct video_presenter
     CRITICAL_SECTION cs;
 };
 
+static HWND video_presenter_create_host_window(void)
+{
+    return CreateWindowExW(0, L"static", L"", WS_POPUP, 0, 0, 1, 1,
+            NULL, NULL, NULL, NULL);
+}
+
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter);
 
 static struct video_presenter *impl_from_IUnknown(IUnknown *iface)
@@ -2317,25 +2323,20 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HWND window;
     HRESULT hr;
 
-    /* No destination window yet: do not create a d3d device at all.
-     *
-     * Creating one here used to happen as soon as the presenter was created,
-     * which is the moment decoding starts. A second d3d9 device in a process
-     * that already has one (the game itself) makes DXVK lose the first
-     * device's swapchain: the game's own window goes black and the engine
-     * carries on in a newly created window.
-     *
-     * A presenter without a video window cannot present anything anyway, so
-     * wait for SetVideoWindow() before touching d3d. */
-    if (!presenter->video_window)
-    {
-        WARN("init_d3d: no video window, deferring device creation.\n");
-        return S_OK;
-    }
+    /* Present into the window the application gave us in SetVideoWindow().
+     * Before that call arrives, use a hidden host window rather than the
+     * desktop: the device window is fixed at creation time, and a
+     * desktop-attached device makes DXVK flash a fullscreen window before
+     * SetVideoWindow() recreates the device for the real target. */
+    if (presenter->video_window)
+        window = presenter->video_window;
+    else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
+        window = presenter->host_window;
+    else
+        window = GetDesktopWindow();
 
-    window = presenter->video_window;
-
-    WARN("init_d3d: video_window %p, device window %p.\n", presenter->video_window, window);
+    WARN("init_d3d: video_window %p, device window %p, host_window %p.\n",
+            presenter->video_window, window, presenter->host_window);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
