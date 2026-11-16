@@ -539,6 +539,65 @@ static BOOL CALLBACK dump_present_windows_cb(HWND hwnd, LPARAM lparam)
     return TRUE;
 }
 
+/* DXVK maps a visible window for every swapchain it is given, so presenting
+ * through a swapchain always leaves an extra window next to the game. Copy the
+ * frame back to system memory and blit it into our child window with GDI
+ * instead: that cannot create a window and always lands inside the parent. */
+static void video_presenter_present_gdi(struct video_presenter *presenter, IDirect3DSurface9 *surface)
+{
+    D3DSURFACE_DESC desc;
+    IDirect3DSurface9 *system_surface;
+    D3DLOCKED_RECT locked;
+    IDirect3DDevice9 *device;
+    BITMAPINFO bmi;
+    RECT client;
+    HDC dc;
+    HRESULT hr;
+
+    if (FAILED(hr = IDirect3DSurface9_GetDesc(surface, &desc)))
+        return;
+
+    if (FAILED(hr = IDirect3DSurface9_GetDevice(surface, &device)))
+        return;
+
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, desc.Width, desc.Height,
+            desc.Format, D3DPOOL_SYSTEMMEM, &system_surface, NULL);
+    if (FAILED(hr))
+    {
+        WARN("present_gdi: failed to create a system surface, hr %#lx.\n", hr);
+        IDirect3DDevice9_Release(device);
+        return;
+    }
+
+    if (FAILED(hr = IDirect3DDevice9_GetRenderTargetData(device, surface, system_surface)))
+    {
+        WARN("present_gdi: GetRenderTargetData failed, hr %#lx.\n", hr);
+    }
+    else if (SUCCEEDED(hr = IDirect3DSurface9_LockRect(system_surface, &locked, NULL, D3DLOCK_READONLY)))
+    {
+        memset(&bmi, 0, sizeof(bmi));
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = desc.Width;
+        bmi.bmiHeader.biHeight = -(LONG)desc.Height;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        if ((dc = GetDC(presenter->video_window)))
+        {
+            GetClientRect(presenter->video_window, &client);
+            StretchDIBits(dc, 0, 0, client.right, client.bottom, 0, 0, desc.Width, desc.Height,
+                    locked.pBits, &bmi, DIB_RGB_COLORS, SRCCOPY);
+            ReleaseDC(presenter->video_window, dc);
+        }
+
+        IDirect3DSurface9_UnlockRect(system_surface);
+    }
+
+    IDirect3DSurface9_Release(system_surface);
+    IDirect3DDevice9_Release(device);
+}
+
 static void video_presenter_sample_present(struct video_presenter *presenter, IMFSample *sample)
 {
     IDirect3DSurface9 *surface, *backbuffer;
@@ -566,7 +625,12 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
         return;
     }
 
-    if (presenter->swapchain)
+    if (presenter->video_window_fallback && presenter->video_window)
+    {
+        video_presenter_present_gdi(presenter, surface);
+        presenter->frame_stats.presented++;
+    }
+    else if (presenter->swapchain)
     {
         if (SUCCEEDED(hr = IDirect3DSwapChain9_GetBackBuffer(presenter->swapchain, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
         {
@@ -2466,7 +2530,7 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
      * one that never supplies a window at all, would otherwise keep
      * presenter->swapchain NULL and every presented sample would be dropped
      * with "No swapchain". */
-    if (SUCCEEDED(hr) && presenter->video_window)
+    if (SUCCEEDED(hr) && presenter->video_window && !presenter->video_window_fallback)
     {
         HRESULT swapchain_hr = video_presenter_create_swapchain(presenter);
 
