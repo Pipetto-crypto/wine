@@ -111,6 +111,7 @@ struct video_presenter
     UINT reset_token;
     HWND video_window;
     BOOL video_window_fallback;
+    HWND host_window;
     /* Hidden window used as the d3d device window until the application
      * supplies the real one through SetVideoWindow(). Creating the device
      * against GetDesktopWindow() makes DXVK map a visible top-level window
@@ -1011,6 +1012,8 @@ static ULONG WINAPI video_presenter_inner_Release(IUnknown *iface)
         }
         if (presenter->allocator)
             IMFVideoSampleAllocator_Release(presenter->allocator);
+        if (presenter->host_window)
+            DestroyWindow(presenter->host_window);
         free(presenter);
     }
 
@@ -1607,6 +1610,12 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
             hr = video_presenter_init_d3d(presenter);
             if (FAILED(hr))
                 WARN("Failed to recreate d3d device for %p, hr %#lx.\n", window, hr);
+
+            if (presenter->host_window)
+            {
+                DestroyWindow(presenter->host_window);
+                presenter->host_window = NULL;
+            }
         }
 
         if (SUCCEEDED(hr))
@@ -2299,6 +2308,14 @@ HRESULT WINAPI MFCreateVideoPresenter(IUnknown *owner, REFIID riid_device, REFII
  * window is known. It must be a real HWND because wined3d attaches its
  * swapchain to the device window, but it stays invisible so nothing flashes
  * on screen. */
+static HWND video_presenter_create_host_window(void)
+{
+    /* Off-screen on purpose: the device window must never be the desktop
+     * window, because presenting that swapchain paints the whole screen. */
+    return CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"static", L"", WS_POPUP,
+            -16384, -16384, 1, 1, NULL, NULL, NULL, NULL);
+}
+
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 {
 
@@ -2308,12 +2325,20 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HWND window;
     HRESULT hr;
 
-    /* Same as upstream and Proton: fall back to the desktop window when the
-     * application has not supplied a video window yet. A private host window
-     * is not equivalent: d3d9 creates a swapchain for it and winex11 then has
-     * to create an X client window for that surface, which ends up on screen
-     * as a stray window as soon as playback starts. */
-    window = presenter->video_window ? presenter->video_window : GetDesktopWindow();
+    /* The device needs a window, but not the desktop window: d3d9 creates a
+     * swapchain right away, and a swapchain attached to the desktop window is
+     * presented over the whole screen for a frame, which shows up as a
+     * fullscreen flash when playback starts.
+     *
+     * Use a private window placed far outside the visible area instead. Its
+     * client window is at the same off-screen position, so nothing is ever
+     * drawn where it can be seen, while the device itself exists. */
+    if (presenter->video_window)
+        window = presenter->video_window;
+    else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
+        window = presenter->host_window;
+    else
+        window = GetDesktopWindow();
 
     WARN("init_d3d: video_window %p, device window %p.\n",
             presenter->video_window, window);
