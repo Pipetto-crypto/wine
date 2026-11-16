@@ -36,6 +36,8 @@ struct vmr7_presenter
     IDirectDraw7 *ddraw;
     IDirectDrawSurface7 *frontbuffer;
     IDirectDrawSurface7 *primary;
+    bool logged_empty_rect;
+    bool logged_invalid_rect;
     HWND window;
 
     SIZE native_size, aspect_ratio;
@@ -111,6 +113,7 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         DWORD_PTR cookie, VMRPRESENTATIONINFO *info)
 {
     struct vmr7_presenter *presenter = impl_from_IVMRImagePresenter(iface);
+    DDSURFACEDESC2 desc;
     POINT point;
     HRESULT hr;
     RECT rect;
@@ -124,6 +127,8 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
             wine_dbgstr_rect(&info->rcSrc), wine_dbgstr_rect(&info->rcDst),
             info->dwTypeSpecificFlags, info->dwInterlaceFlags);
 
+    desc.dwSize = sizeof(desc);
+
     if (info->dwFlags & VMRSample_SrcDstRectsValid)
         FIXME("Ignoring src/dst rects.\n");
 
@@ -131,8 +136,41 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
     point.x = point.y = 0;
     ClientToScreen(presenter->window, &point);
     OffsetRect(&rect, point.x, point.y);
+
+    if (IsRectEmpty(&rect))
+    {
+        if (!presenter->logged_empty_rect)
+        {
+            WARN("Empty destination rect, window %p, position %ld,%ld.\n",
+                    presenter->window, point.x, point.y);
+            presenter->logged_empty_rect = true;
+        }
+        return S_OK;
+    }
+
+    /* The destination rect is in screen coordinates, and the primary surface is
+     * not necessarily as large as the screen: a window that is bigger than the
+     * surface, or partly outside it, gives ddraw a rect it rejects outright with
+     * DDERR_INVALIDRECT, and then nothing is ever presented at all. Clip it, the
+     * way a real driver would. */
+    if (SUCCEEDED(IDirectDrawSurface7_GetSurfaceDesc(presenter->primary, &desc)))
+    {
+        RECT surface_rect = { 0, 0, desc.dwWidth, desc.dwHeight };
+
+        if (!IntersectRect(&rect, &rect, &surface_rect))
+        {
+            if (!presenter->logged_invalid_rect)
+            {
+                WARN("Destination rect outside primary surface %lux%lu, window %p.\n",
+                        desc.dwWidth, desc.dwHeight, presenter->window);
+                presenter->logged_invalid_rect = true;
+            }
+            return S_OK;
+        }
+    }
+
     if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
-        ERR("Failed to blit, hr %#lx.\n", hr);
+        ERR("Failed to blit, hr %#lx, rect %s.\n", hr, wine_dbgstr_rect(&rect));
 
     return S_OK;
 }
