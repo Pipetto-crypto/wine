@@ -397,6 +397,13 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
 
     TRACE("%p, %p.\n", iface, sample);
 
+    {
+        static int diag_samples;
+
+        if (diag_samples++ < 3)
+            WARN("ProcessSample reached the video sink, sample %p.\n", sample);
+    }
+
     EnterCriticalSection(&stream->cs);
 
     if (!stream->parent)
@@ -1602,7 +1609,12 @@ static HRESULT video_renderer_create_presenter(struct video_renderer *renderer, 
     HRESULT hr;
 
     if (attributes && SUCCEEDED(IMFAttributes_GetUINT64(attributes, &MF_ACTIVATE_VIDEO_WINDOW, &value)))
+    {
         renderer->window = UlongToHandle(value);
+        WARN("create_presenter: MF_ACTIVATE_VIDEO_WINDOW -> %p.\n", renderer->window);
+    }
+    else
+        WARN("create_presenter: no MF_ACTIVATE_VIDEO_WINDOW attribute, attributes %p.\n", attributes);
 
     if (attributes && SUCCEEDED(IMFAttributes_GetUnknown(attributes, &MF_ACTIVATE_CUSTOM_VIDEO_PRESENTER_ACTIVATE,
             &IID_IMFActivate, (void **)&activate)))
@@ -1697,6 +1709,9 @@ static HRESULT video_renderer_configure_presenter(struct video_renderer *rendere
     if (SUCCEEDED(IMFVideoPresenter_QueryInterface(renderer->presenter, &IID_IMFVideoDisplayControl, (void **)&control)))
     {
         GetClientRect(renderer->window, &rect);
+
+        WARN("configure_presenter: renderer window %p, client rect %s.\n",
+                renderer->window, wine_dbgstr_rect(&rect));
 
         if (SUCCEEDED(hr = IMFVideoDisplayControl_SetVideoWindow(control, renderer->window)))
             hr = IMFVideoDisplayControl_SetVideoPosition(control, NULL, &rect);

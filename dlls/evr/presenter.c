@@ -1464,11 +1464,13 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
 
     TRACE("%p, %p.\n", iface, window);
 
+    WARN("SetVideoWindow %p, is_window %d, previous %p, swapchain %p.\n", window,
+            IsWindow(window), presenter->video_window, presenter->swapchain);
+
     if (!IsWindow(window))
         return E_INVALIDARG;
 
     EnterCriticalSection(&presenter->cs);
-    WARN("SetVideoWindow %p, previous %p, swapchain %p.\n", window, presenter->video_window, presenter->swapchain);
     if (presenter->video_window != window)
     {
         BOOL had_device_window = presenter->video_window != NULL;
