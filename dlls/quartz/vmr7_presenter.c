@@ -36,8 +36,8 @@ struct vmr7_presenter
     IDirectDraw7 *ddraw;
     IDirectDrawSurface7 *frontbuffer;
     IDirectDrawSurface7 *primary;
-    bool logged_empty_rect;
-    bool logged_invalid_rect;
+    BOOL logged_empty_rect;
+    BOOL logged_invalid_rect;
     HWND window;
 
     SIZE native_size, aspect_ratio;
@@ -143,7 +143,7 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         {
             WARN("Empty destination rect, window %p, position %ld,%ld.\n",
                     presenter->window, point.x, point.y);
-            presenter->logged_empty_rect = true;
+            presenter->logged_empty_rect = TRUE;
         }
         return S_OK;
     }
@@ -163,7 +163,7 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
             {
                 WARN("Destination rect outside primary surface %lux%lu, window %p.\n",
                         desc.dwWidth, desc.dwHeight, presenter->window);
-                presenter->logged_invalid_rect = true;
+                presenter->logged_invalid_rect = TRUE;
             }
             return S_OK;
         }
