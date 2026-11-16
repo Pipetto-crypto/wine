@@ -568,9 +568,23 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
         if (SUCCEEDED(hr = IDirect3DSwapChain9_GetBackBuffer(presenter->swapchain, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
         {
             IDirect3DSwapChain9_GetDevice(presenter->swapchain, &device);
-            IDirect3DDevice9_StretchRect(device, surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+            hr = IDirect3DDevice9_StretchRect(device, surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+            if (FAILED(hr))
+            {
+                static int diag_stretch;
 
-            IDirect3DSwapChain9_Present(presenter->swapchain, NULL, NULL, NULL, NULL, 0);
+                if (diag_stretch++ < 3)
+                    WARN("StretchRect failed, hr %#lx, surface %p, backbuffer %p.\n", hr, surface, backbuffer);
+            }
+
+            hr = IDirect3DSwapChain9_Present(presenter->swapchain, NULL, NULL, NULL, NULL, 0);
+            if (FAILED(hr))
+            {
+                static int diag_present;
+
+                if (diag_present++ < 3)
+                    WARN("SwapChain Present failed, hr %#lx.\n", hr);
+            }
             presenter->frame_stats.presented++;
 
             IDirect3DDevice9_Release(device);
