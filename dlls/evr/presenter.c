@@ -116,7 +116,6 @@ struct video_presenter
      * against GetDesktopWindow() makes DXVK map a visible top-level window
      * onto the desktop for a moment, which shows up as a fullscreen window
      * flashing on screen before SetVideoWindow() arrives. */
-    HWND host_window;
     MFVideoNormalizedRect src_rect;
     RECT dst_rect;
     DWORD rendering_prefs;
@@ -134,12 +133,6 @@ struct video_presenter
 
     CRITICAL_SECTION cs;
 };
-
-static HWND video_presenter_create_host_window(void)
-{
-    return CreateWindowExW(0, L"static", L"", WS_POPUP, 0, 0, 1, 1,
-            NULL, NULL, NULL, NULL);
-}
 
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter);
 
@@ -1018,8 +1011,6 @@ static ULONG WINAPI video_presenter_inner_Release(IUnknown *iface)
         }
         if (presenter->allocator)
             IMFVideoSampleAllocator_Release(presenter->allocator);
-        if (presenter->host_window)
-            DestroyWindow(presenter->host_window);
         free(presenter);
     }
 
@@ -1616,12 +1607,6 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
             hr = video_presenter_init_d3d(presenter);
             if (FAILED(hr))
                 WARN("Failed to recreate d3d device for %p, hr %#lx.\n", window, hr);
-
-            if (presenter->host_window)
-            {
-                DestroyWindow(presenter->host_window);
-                presenter->host_window = NULL;
-            }
         }
 
         if (SUCCEEDED(hr))
@@ -2323,20 +2308,22 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HWND window;
     HRESULT hr;
 
-    /* Present into the window the application gave us in SetVideoWindow().
-     * Before that call arrives, use a hidden host window rather than the
-     * desktop: the device window is fixed at creation time, and a
-     * desktop-attached device makes DXVK flash a fullscreen window before
-     * SetVideoWindow() recreates the device for the real target. */
-    if (presenter->video_window)
-        window = presenter->video_window;
-    else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
-        window = presenter->host_window;
-    else
-        window = GetDesktopWindow();
+    /* No video window yet: do not create a device at all.
+     *
+     * Creating one on a hidden host window makes d3d9 create a swapchain for
+     * that window, and winex11 then creates an X client window for the surface.
+     * A window that is not part of any visible host window has no business
+     * being on screen, and it is not: see the matching change in winex11. */
+    if (!presenter->video_window)
+    {
+        WARN("init_d3d: no video window, deferring device creation.\n");
+        return S_OK;
+    }
 
-    WARN("init_d3d: video_window %p, device window %p, host_window %p.\n",
-            presenter->video_window, window, presenter->host_window);
+    window = presenter->video_window;
+
+    WARN("init_d3d: video_window %p, device window %p.\n",
+            presenter->video_window, window);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
