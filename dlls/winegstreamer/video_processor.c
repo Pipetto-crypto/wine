@@ -954,6 +954,9 @@ static HRESULT WINAPI video_processor_ProcessOutput(IMFTransform *iface, DWORD f
 {
     struct video_processor *impl = impl_from_IMFTransform(iface);
     IMFSample *output_sample, *input_sample;
+    UINT64 frame_size;
+    UINT32 sample_size = 0;
+    GUID subtype;
     HRESULT hr;
     BOOL playback_mode, provide_samples;
 
@@ -999,7 +1002,15 @@ static HRESULT WINAPI video_processor_ProcessOutput(IMFTransform *iface, DWORD f
     {
         if (FAILED(hr = wg_transform_push_mf(impl->wg_transform, input_sample, impl->wg_sample_queue)))
             goto done;
-        if (FAILED(hr = wg_transform_read_mf(impl->wg_transform, output_sample, 0, &samples->dwStatus, NULL)))
+        /* Passing 0 here made wg_sample_create_mf() fall back to the sample
+         * length instead of the frame size, which is wrong for 2D buffers
+         * with padding and made it log "Expected an MF sample size". */
+        if (SUCCEEDED(IMFMediaType_GetGUID(impl->output_type, &MF_MT_SUBTYPE, &subtype))
+                && SUCCEEDED(IMFMediaType_GetUINT64(impl->output_type, &MF_MT_FRAME_SIZE, &frame_size))
+                && FAILED(MFCalculateImageSize(&subtype, frame_size >> 32, (UINT32)frame_size, &sample_size)))
+            sample_size = 0;
+
+        if (FAILED(hr = wg_transform_read_mf(impl->wg_transform, output_sample, sample_size, &samples->dwStatus, NULL)))
             goto done;
         wg_sample_queue_flush(impl->wg_sample_queue, false);
     }

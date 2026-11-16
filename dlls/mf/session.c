@@ -3877,7 +3877,9 @@ static HRESULT transform_node_pull_samples(const struct media_session *session, 
     }
     while (hr == S_OK && transform_node_markin_need_more_input(session, node, buffers));
 
-    if (FAILED(hr) && node->u.transform.diag_pull_warns++ < 3)
+    /* MF_E_TRANSFORM_NEED_MORE_INPUT is the normal way for an MFT to say it
+     * wants another input sample; it is not a reason to discard anything. */
+    if (FAILED(hr) && hr != MF_E_TRANSFORM_NEED_MORE_INPUT && node->u.transform.diag_pull_warns++ < 3)
         WARN("pull_samples: ProcessOutput returned %#lx, samples will be discarded.\n", hr);
 
     /* Collect returned samples for all streams. */

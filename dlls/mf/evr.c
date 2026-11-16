@@ -2354,6 +2354,12 @@ static HRESULT WINAPI video_renderer_event_sink_Notify(IMediaEventSink *iface, L
             IMFMediaEventQueue_QueueEventParamVar(renderer->streams[idx]->event_queue,
                     MEStreamSinkDeviceChanged, &GUID_NULL, S_OK, NULL);
     }
+    else if (event == EC_PROCESSING_LATENCY)
+    {
+        /* The presenter reports how long it needs to render a frame. Nothing
+         * for the renderer to do with it, but it is a defined event and must
+         * not be reported as unhandled on every frame. */
+    }
     else if (event >= EC_USER)
     {
         PROPVARIANT code;
