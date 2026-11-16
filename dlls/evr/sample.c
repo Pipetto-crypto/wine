@@ -566,6 +566,9 @@ static HRESULT sample_allocator_create_samples(struct sample_allocator *allocato
     height = frame_size;
     width = frame_size >> 32;
 
+    WARN("allocator: subtype %s/%#x, format %#x, %ux%u, device_manager %p.\n",
+            debugstr_guid(&subtype), subtype.Data1, format, width, height, allocator->device_manager);
+
     if (allocator->device_manager)
     {
         if (SUCCEEDED(hr = IDirect3DDeviceManager9_OpenDeviceHandle(allocator->device_manager, &hdevice)))
