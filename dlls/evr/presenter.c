@@ -518,12 +518,44 @@ static HRESULT video_presenter_get_sample_surface(IMFSample *sample, IDirect3DSu
     return hr;
 }
 
+static BOOL CALLBACK dump_present_windows_cb(HWND hwnd, LPARAM lparam)
+{
+    WCHAR class[64], title[64];
+    RECT rect;
+    DWORD pid = 0;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+
+    GetClassNameW(hwnd, class, ARRAY_SIZE(class));
+    GetWindowTextW(hwnd, title, ARRAY_SIZE(title));
+    GetWindowRect(hwnd, &rect);
+
+    WARN("present window %p class %s title %s rect %s visible %d parent %p owner %p.\n",
+            hwnd, debugstr_w(class), debugstr_w(title), wine_dbgstr_rect(&rect),
+            IsWindowVisible(hwnd), GetParent(hwnd), GetWindow(hwnd, GW_OWNER));
+
+    return TRUE;
+}
+
 static void video_presenter_sample_present(struct video_presenter *presenter, IMFSample *sample)
 {
     IDirect3DSurface9 *surface, *backbuffer;
     IDirect3DDevice9 *device;
     struct sample_queue *queue = &presenter->thread.queue;
     HRESULT hr;
+
+    {
+        static BOOL dumped;
+
+        if (!dumped)
+        {
+            dumped = TRUE;
+            WARN("Presenting into %p, dumping windows now.\n", presenter->video_window);
+            EnumWindows(dump_present_windows_cb, 0);
+        }
+    }
 
     if (FAILED(hr = video_presenter_get_sample_surface(sample, &surface)))
     {
