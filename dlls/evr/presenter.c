@@ -110,6 +110,7 @@ struct video_presenter
     LONGLONG frame_time_threshold;
     UINT reset_token;
     HWND video_window;
+    BOOL video_window_fallback;
     /* Hidden window used as the d3d device window until the application
      * supplies the real one through SetVideoWindow(). Creating the device
      * against GetDesktopWindow() makes DXVK map a visible top-level window
@@ -1473,12 +1474,13 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
     EnterCriticalSection(&presenter->cs);
     if (presenter->video_window != window)
     {
-        BOOL had_device_window = presenter->video_window != NULL;
+        BOOL had_device_window = presenter->video_window != NULL && !presenter->video_window_fallback;
 
         if (presenter->swapchain)
             IDirect3DSwapChain9_Release(presenter->swapchain);
         presenter->swapchain = NULL;
         presenter->video_window = window;
+        presenter->video_window_fallback = FALSE;
 
         /* The device was created before we knew the real window, so it is
          * attached to the hidden host window. Recreate it once, now that
@@ -2205,6 +2207,51 @@ static HWND video_presenter_create_host_window(void)
             NULL, NULL, NULL, NULL);
 }
 
+struct find_main_window_params
+{
+    HWND best;
+    LONG area;
+};
+
+static BOOL CALLBACK find_main_window_cb(HWND hwnd, LPARAM lparam)
+{
+    struct find_main_window_params *params = (struct find_main_window_params *)lparam;
+    RECT rect;
+    LONG area;
+    DWORD pid = 0;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+    if (!IsWindowVisible(hwnd))
+        return TRUE;
+    if (!GetWindowRect(hwnd, &rect))
+        return TRUE;
+
+    area = (rect.right - rect.left) * (rect.bottom - rect.top);
+    if (area > params->area)
+    {
+        params->area = area;
+        params->best = hwnd;
+    }
+
+    return TRUE;
+}
+
+/* The media sink may be created without MF_ACTIVATE_VIDEO_WINDOW and the
+ * application may never call SetVideoWindow(), in which case the presenter has
+ * no destination at all. Fall back to the largest visible top-level window of
+ * this process, which is the game window, instead of a hidden 1x1 host window
+ * that can never show anything. */
+static HWND video_presenter_find_main_window(void)
+{
+    struct find_main_window_params params = { 0 };
+
+    EnumWindows(find_main_window_cb, (LPARAM)&params);
+
+    return params.best;
+}
+
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 {
 
@@ -2221,6 +2268,12 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
      * SetVideoWindow() recreates the device for the real target. */
     if (presenter->video_window)
         window = presenter->video_window;
+    else if ((window = video_presenter_find_main_window()))
+    {
+        WARN("init_d3d: no video window, using main window %p.\n", window);
+        presenter->video_window = window;
+        presenter->video_window_fallback = TRUE;
+    }
     else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
         window = presenter->host_window;
     else
@@ -2261,6 +2314,21 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     if (SUCCEEDED(hr = create_video_sample_allocator(FALSE, &IID_IMFVideoSampleAllocator, (void **)&presenter->allocator)))
     {
         hr = IMFVideoSampleAllocator_SetDirectXManager(presenter->allocator, (IUnknown *)presenter->device_manager);
+    }
+
+    /* SetVideoWindow() is not necessarily called after this point: an
+     * application that passes the window through MF_ACTIVATE_VIDEO_WINDOW, or
+     * one that never supplies a window at all, would otherwise keep
+     * presenter->swapchain NULL and every presented sample would be dropped
+     * with "No swapchain". */
+    if (SUCCEEDED(hr) && presenter->video_window)
+    {
+        HRESULT swapchain_hr = video_presenter_create_swapchain(presenter);
+
+        if (FAILED(swapchain_hr))
+            WARN("init_d3d: failed to create swapchain for %p, hr %#lx.\n", presenter->video_window, swapchain_hr);
+        else
+            WARN("init_d3d: created swapchain for window %p.\n", presenter->video_window);
     }
 
     return hr;
