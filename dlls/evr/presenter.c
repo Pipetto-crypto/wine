@@ -2308,19 +2308,12 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HWND window;
     HRESULT hr;
 
-    /* No video window yet: do not create a device at all.
-     *
-     * Creating one on a hidden host window makes d3d9 create a swapchain for
-     * that window, and winex11 then creates an X client window for the surface.
-     * A window that is not part of any visible host window has no business
-     * being on screen, and it is not: see the matching change in winex11. */
-    if (!presenter->video_window)
-    {
-        WARN("init_d3d: no video window, deferring device creation.\n");
-        return S_OK;
-    }
-
-    window = presenter->video_window;
+    /* Same as upstream and Proton: fall back to the desktop window when the
+     * application has not supplied a video window yet. A private host window
+     * is not equivalent: d3d9 creates a swapchain for it and winex11 then has
+     * to create an X client window for that surface, which ends up on screen
+     * as a stray window as soon as playback starts. */
+    window = presenter->video_window ? presenter->video_window : GetDesktopWindow();
 
     WARN("init_d3d: video_window %p, device window %p.\n",
             presenter->video_window, window);
