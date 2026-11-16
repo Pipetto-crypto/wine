@@ -436,10 +436,22 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
             }
 
             if (SUCCEEDED(input_hr))
-            while ((hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0)) == MF_E_TRANSFORM_TYPE_NOT_SET)
             {
-                if (FAILED(hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))
-                    break;
+                hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0);
+                while (hr == MF_E_TRANSFORM_TYPE_NOT_SET)
+                {
+                    if (FAILED(hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))
+                        break;
+                    hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0);
+                }
+
+                {
+                    static int diag_notify;
+
+                    if (diag_notify++ < 3)
+                        WARN("ProcessMessage PROCESSINPUTNOTIFY returned %#lx, presenter %p.\n",
+                                hr, stream->parent->presenter);
+                }
             }
         }
 

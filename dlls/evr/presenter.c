@@ -696,9 +696,6 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
     IMFSample *sample;
     DWORD status;
 
-    if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
-        return MF_E_SHUTDOWN;
-
     {
         static int diag_enter;
 
@@ -707,6 +704,9 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
                     presenter->media_type, presenter->state, presenter->flags,
                     (unsigned long)presenter->thread.tid, presenter->clock);
     }
+
+    if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
+        return MF_E_SHUTDOWN;
 
     if (!presenter->media_type)
     {
