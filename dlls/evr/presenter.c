@@ -2292,8 +2292,25 @@ static BOOL CALLBACK find_main_window_cb(HWND hwnd, LPARAM lparam)
 static HWND video_presenter_find_main_window(void)
 {
     struct find_main_window_params params = { 0 };
+    HWND foreground;
+    DWORD pid = 0;
+
+    /* Prefer the window the user is actually looking at. A game may create
+     * several top-level windows with the same title, and picking the largest
+     * one is not necessarily the one it draws its content into. */
+    if ((foreground = GetForegroundWindow()))
+    {
+        GetWindowThreadProcessId(foreground, &pid);
+        if (pid == GetCurrentProcessId() && IsWindowVisible(foreground))
+        {
+            WARN("find_main_window: using foreground window %p.\n", foreground);
+            return foreground;
+        }
+    }
 
     EnumWindows(find_main_window_cb, (LPARAM)&params);
+
+    WARN("find_main_window: using largest window %p (area %ld).\n", params.best, params.area);
 
     return params.best;
 }
