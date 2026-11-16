@@ -76,6 +76,9 @@ on:
 
 env:
   PREFIX: /tmp/wine-install
+  # 压缩后同样 2G 能装下更多对象，提高命中率；Wine 的 wow64 双架构对象量很大。
+  CCACHE_COMPRESS: "1"
+  CCACHE_COMPRESSLEVEL: "6"
 
 permissions:
   contents: write
@@ -187,7 +190,8 @@ jobs:
             libwayland-dev \
             wayland-protocols \
             libxkbcommon-dev \
-            ccache"
+            ccache \
+            lld"
 
           sudo apt install -y $BASE_DEPS
 
@@ -282,7 +286,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ runner.os }}-wine-wow64
-          max-size: 2G
+          max-size: 4G
 
       # --------------------------------------------------------
       # FFmpeg 预编译包（winedmo）
@@ -360,7 +364,9 @@ jobs:
             -fno-plt -fno-math-errno -ffunction-sections -fdata-sections \
             -fmerge-all-constants -fno-ident"
           export CROSSCXXFLAGS="$CROSSCFLAGS"
-          export LDFLAGS="-Wl,-O2 -Wl,--as-needed -Wl,--gc-sections -Wl,--build-id=none"
+          # lld 链接速度明显快于 GNU ld；Wine 要链接上千个 ELF 目标，
+          # 这一步在实测中占比较大。PE 侧走 CROSSCC 的 mingw ld，不受影响。
+          export LDFLAGS="-fuse-ld=lld -Wl,-O2 -Wl,--as-needed -Wl,--gc-sections -Wl,--build-id=none"
 
           # 这套开关沿用 termux-glibc-mangohud 的 Termux 定制：
           #   --enable-win64 + --enable-archs 一起传，win64=yes 会抑制 configure.ac:123
