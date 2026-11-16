@@ -2268,6 +2268,27 @@ static ULONG WINAPI video_renderer_event_sink_Release(IMediaEventSink *iface)
     return IMFMediaSink_Release(&renderer->IMFMediaSink_iface);
 }
 
+static BOOL CALLBACK dump_window_cb(HWND hwnd, LPARAM lparam)
+{
+    WCHAR class[64], title[64];
+    RECT rect;
+    DWORD pid = 0;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+
+    GetClassNameW(hwnd, class, ARRAY_SIZE(class));
+    GetWindowTextW(hwnd, title, ARRAY_SIZE(title));
+    GetWindowRect(hwnd, &rect);
+
+    WARN("window %p class %s title %s rect %s visible %d parent %p.\n",
+            hwnd, debugstr_w(class), debugstr_w(title), wine_dbgstr_rect(&rect),
+            IsWindowVisible(hwnd), GetParent(hwnd));
+
+    return TRUE;
+}
+
 static HRESULT WINAPI video_renderer_event_sink_Notify(IMediaEventSink *iface, LONG event, LONG_PTR param1, LONG_PTR param2)
 {
     struct video_renderer *renderer = impl_from_IMediaEventSink(iface);
@@ -2275,6 +2296,17 @@ static HRESULT WINAPI video_renderer_event_sink_Notify(IMediaEventSink *iface, L
     unsigned int idx;
 
     TRACE("%p, %ld, %Id, %Id.\n", iface, event, param1, param2);
+
+    {
+        static BOOL dumped;
+
+        if (!dumped)
+        {
+            dumped = TRUE;
+            WARN("Dumping top-level windows of this process.\n");
+            EnumWindows(dump_window_cb, 0);
+        }
+    }
 
     EnterCriticalSection(&renderer->cs);
 
