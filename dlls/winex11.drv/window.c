@@ -2284,6 +2284,15 @@ void detach_client_window( struct x11drv_win_data *data, Window client_window )
         XReparentWindow( gdi_display, client_window, get_dummy_parent(), 0, 0 );
     }
 
+    /* A detached client window is no longer part of its host window and must
+     * not stay on screen. Reparenting it to the dummy parent is not enough:
+     * when the X server does not clip children to their parent geometry (and
+     * when XShape is unavailable, so the dummy parent has no empty shape),
+     * the window keeps being displayed at its old size and position. That is
+     * the stray window that appears whenever a second client window is needed,
+     * for instance when video playback creates another surface. */
+    XUnmapWindow( gdi_display, client_window );
+
     data->client_window = 0;
 }
 
@@ -2305,6 +2314,10 @@ void attach_client_window( struct x11drv_win_data *data, Window client_window )
         XReparentWindow( gdi_display, client_window, data->whole_window, data->rects.client.left - data->rects.visible.left,
                          data->rects.client.top - data->rects.visible.top );
     }
+
+    /* detach_client_window() unmaps, including for the paths that detach and
+     * attach the same window again (set_window_visual()), so map it back here. */
+    XMapWindow( gdi_display, client_window );
 
     data->client_window = client_window;
 }
