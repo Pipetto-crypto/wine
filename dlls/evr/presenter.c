@@ -639,7 +639,16 @@ static void video_presenter_check_queue(struct video_presenter *presenter,
         }
 
         if (present)
+        {
+            static int diag_present;
+
+            if (diag_present++ < 3)
+                WARN("check_queue: presenting, pts %s, clocktime %s, threshold %s.\n",
+                        wine_dbgstr_longlong(pts), wine_dbgstr_longlong(clocktime),
+                        wine_dbgstr_longlong(presenter->frame_time_threshold));
+
             video_presenter_sample_present(presenter, sample);
+        }
         else
             video_presenter_sample_queue_push(presenter, sample, TRUE);
 
@@ -665,6 +674,12 @@ static void video_presenter_schedule_sample(struct video_presenter *presenter, I
 
     if (presenter->clock)
     {
+        static int diag_sched;
+
+        if (diag_sched++ < 3)
+            WARN("schedule_sample: queueing, tid %#lx, clock %p.\n",
+                    (unsigned long)presenter->thread.tid, presenter->clock);
+
         video_presenter_sample_queue_push(presenter, sample, FALSE);
         PostThreadMessageW(presenter->thread.tid, EVRM_PRESENT, 0, 0);
     }
@@ -683,6 +698,15 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
 
     if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
         return MF_E_SHUTDOWN;
+
+    {
+        static int diag_enter;
+
+        if (diag_enter++ < 3)
+            WARN("process_input: enter, media_type %p, state %d, flags %#x, tid %#lx, clock %p.\n",
+                    presenter->media_type, presenter->state, presenter->flags,
+                    (unsigned long)presenter->thread.tid, presenter->clock);
+    }
 
     if (!presenter->media_type)
     {
