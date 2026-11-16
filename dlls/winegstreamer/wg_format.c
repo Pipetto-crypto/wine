@@ -632,7 +632,7 @@ static void wg_format_from_caps_video_h264(struct wg_format *format, const GstCa
 
 void wg_format_from_caps(struct wg_format *format, const GstCaps *caps)
 {
-    WARN("caps from gst: %" GST_PTR_FORMAT "\n", caps);
+    GST_WARNING("caps from gst: %" GST_PTR_FORMAT, caps);
     static const char *const container_caps[] =
     {
         "video/x-ms-asf",
@@ -919,7 +919,7 @@ static GstCaps *wg_format_to_caps_video(const struct wg_format *format)
             gst_structure_remove_fields(structure, "colorimetry", "chroma-site", NULL);
         }
     }
-    WARN("caps to gst: %" GST_PTR_FORMAT "\n", caps);
+    GST_WARNING("caps to gst: %" GST_PTR_FORMAT, caps);
     return caps;
 }
 
