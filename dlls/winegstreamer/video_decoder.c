@@ -70,6 +70,12 @@ static const struct subtype_info subtype_info_list[] =
 
 static const GUID *const video_decoder_output_types[] =
 {
+    /* RGB32 is listed first so that the pipeline picks it. Letting the
+     * video reach the renderer as YUV means the conversion happens there,
+     * with a matrix and a range that are hardcoded and know nothing about
+     * the actual stream, which shifts colours. Converting in gstreamer
+     * keeps the colours of the source. */
+    &MFVideoFormat_RGB32,
     &MFVideoFormat_NV12,
     &MFVideoFormat_YV12,
     &MFVideoFormat_IYUV,
