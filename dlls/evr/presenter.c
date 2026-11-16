@@ -2308,12 +2308,23 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HWND window;
     HRESULT hr;
 
-    /* Same as upstream and Proton: fall back to the desktop window when the
-     * application has not supplied a video window yet. A private host window
-     * is not equivalent: d3d9 creates a swapchain for it and winex11 then has
-     * to create an X client window for that surface, which ends up on screen
-     * as a stray window as soon as playback starts. */
-    window = presenter->video_window ? presenter->video_window : GetDesktopWindow();
+    /* No video window yet: do not create a device yet. */
+    /*
+     * d3d9 creates a swapchain as soon as the device exists, and with the
+     * desktop window as the device window presenting that swapchain paints
+     * the whole screen for a frame: that is the fullscreen flash seen when
+     * playback starts. The device is not needed before there is a window to
+     * present to. SetVideoWindow() creates it once the application supplies
+     * one, and a sink that never gets a device manager is still connected
+     * through the sample copier.
+     */
+    if (!presenter->video_window)
+    {
+        WARN("init_d3d: no video window yet, deferring device creation.\n");
+        return S_OK;
+    }
+
+    window = presenter->video_window;
 
     WARN("init_d3d: video_window %p, device window %p.\n",
             presenter->video_window, window);
