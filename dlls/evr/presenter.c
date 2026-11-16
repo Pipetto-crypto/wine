@@ -308,6 +308,15 @@ static HRESULT video_presenter_set_media_type(struct video_presenter *presenter,
 
     video_presenter_reset_media_type(presenter);
 
+    if (!presenter->allocator)
+    {
+        /* No device yet, so no allocator. Keep the type so the frame rate
+         * and the rest of the state are available once one exists. */
+        presenter->media_type = media_type;
+        IMFMediaType_AddRef(presenter->media_type);
+        return S_OK;
+    }
+
     if (SUCCEEDED(hr = IMFVideoSampleAllocator_InitializeSampleAllocator(presenter->allocator,
             presenter->allocator_capacity, media_type)))
     {
@@ -539,65 +548,6 @@ static BOOL CALLBACK dump_present_windows_cb(HWND hwnd, LPARAM lparam)
     return TRUE;
 }
 
-/* DXVK maps a visible window for every swapchain it is given, so presenting
- * through a swapchain always leaves an extra window next to the game. Copy the
- * frame back to system memory and blit it into our child window with GDI
- * instead: that cannot create a window and always lands inside the parent. */
-static void video_presenter_present_gdi(struct video_presenter *presenter, IDirect3DSurface9 *surface)
-{
-    D3DSURFACE_DESC desc;
-    IDirect3DSurface9 *system_surface;
-    D3DLOCKED_RECT locked;
-    IDirect3DDevice9 *device;
-    BITMAPINFO bmi;
-    RECT client;
-    HDC dc;
-    HRESULT hr;
-
-    if (FAILED(hr = IDirect3DSurface9_GetDesc(surface, &desc)))
-        return;
-
-    if (FAILED(hr = IDirect3DSurface9_GetDevice(surface, &device)))
-        return;
-
-    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, desc.Width, desc.Height,
-            desc.Format, D3DPOOL_SYSTEMMEM, &system_surface, NULL);
-    if (FAILED(hr))
-    {
-        WARN("present_gdi: failed to create a system surface, hr %#lx.\n", hr);
-        IDirect3DDevice9_Release(device);
-        return;
-    }
-
-    if (FAILED(hr = IDirect3DDevice9_GetRenderTargetData(device, surface, system_surface)))
-    {
-        WARN("present_gdi: GetRenderTargetData failed, hr %#lx.\n", hr);
-    }
-    else if (SUCCEEDED(hr = IDirect3DSurface9_LockRect(system_surface, &locked, NULL, D3DLOCK_READONLY)))
-    {
-        memset(&bmi, 0, sizeof(bmi));
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = desc.Width;
-        bmi.bmiHeader.biHeight = -(LONG)desc.Height;
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        if ((dc = GetDC(presenter->video_window)))
-        {
-            GetClientRect(presenter->video_window, &client);
-            StretchDIBits(dc, 0, 0, client.right, client.bottom, 0, 0, desc.Width, desc.Height,
-                    locked.pBits, &bmi, DIB_RGB_COLORS, SRCCOPY);
-            ReleaseDC(presenter->video_window, dc);
-        }
-
-        IDirect3DSurface9_UnlockRect(system_surface);
-    }
-
-    IDirect3DSurface9_Release(system_surface);
-    IDirect3DDevice9_Release(device);
-}
-
 static void video_presenter_sample_present(struct video_presenter *presenter, IMFSample *sample)
 {
     IDirect3DSurface9 *surface, *backbuffer;
@@ -614,8 +564,6 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
             WARN("Presenting into %p, dumping windows now.\n", presenter->video_window);
             EnumWindows(dump_present_windows_cb, 0);
 
-            if (presenter->video_window_fallback)
-                ShowWindow(presenter->video_window, SW_SHOW);
         }
     }
 
@@ -625,12 +573,7 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
         return;
     }
 
-    if (presenter->video_window_fallback && presenter->video_window)
-    {
-        video_presenter_present_gdi(presenter, surface);
-        presenter->frame_stats.presented++;
-    }
-    else if (presenter->swapchain)
+    if (presenter->swapchain)
     {
         if (SUCCEEDED(hr = IDirect3DSwapChain9_GetBackBuffer(presenter->swapchain, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
         {
@@ -805,6 +748,9 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
         MFTIME systime;
 
         if (!(presenter->flags & PRESENTER_MIXER_HAS_INPUT))
+            break;
+
+        if (!presenter->allocator)
             break;
 
         if (FAILED(hr = IMFVideoSampleAllocator_AllocateSample(presenter->allocator, &sample)))
@@ -2362,93 +2308,6 @@ HRESULT WINAPI MFCreateVideoPresenter(IUnknown *owner, REFIID riid_device, REFII
  * window is known. It must be a real HWND because wined3d attaches its
  * swapchain to the device window, but it stays invisible so nothing flashes
  * on screen. */
-static HWND video_presenter_create_host_window(void)
-{
-    return CreateWindowExW(0, L"static", L"", WS_POPUP, 0, 0, 1, 1,
-            NULL, NULL, NULL, NULL);
-}
-
-struct find_main_window_params
-{
-    HWND best;
-    LONG area;
-};
-
-static BOOL CALLBACK find_main_window_cb(HWND hwnd, LPARAM lparam)
-{
-    struct find_main_window_params *params = (struct find_main_window_params *)lparam;
-    RECT rect;
-    LONG area;
-    DWORD pid = 0;
-
-    GetWindowThreadProcessId(hwnd, &pid);
-    if (pid != GetCurrentProcessId())
-        return TRUE;
-    if (!IsWindowVisible(hwnd))
-        return TRUE;
-    if (!GetWindowRect(hwnd, &rect))
-        return TRUE;
-
-    area = (rect.right - rect.left) * (rect.bottom - rect.top);
-    if (area > params->area)
-    {
-        params->area = area;
-        params->best = hwnd;
-    }
-
-    return TRUE;
-}
-
-/* The media sink may be created without MF_ACTIVATE_VIDEO_WINDOW and the
- * application may never call SetVideoWindow(), in which case the presenter has
- * no destination at all. Fall back to the largest visible top-level window of
- * this process, which is the game window, instead of a hidden 1x1 host window
- * that can never show anything. */
-static HWND video_presenter_find_main_window(void)
-{
-    struct find_main_window_params params = { 0 };
-    HWND foreground;
-    DWORD pid = 0;
-
-    /* Prefer the window the user is actually looking at. A game may create
-     * several top-level windows with the same title, and picking the largest
-     * one is not necessarily the one it draws its content into. */
-    if ((foreground = GetForegroundWindow()))
-    {
-        GetWindowThreadProcessId(foreground, &pid);
-        if (pid == GetCurrentProcessId() && IsWindowVisible(foreground))
-        {
-            WARN("find_main_window: using foreground window %p.\n", foreground);
-            return foreground;
-        }
-    }
-
-    EnumWindows(find_main_window_cb, (LPARAM)&params);
-
-    WARN("find_main_window: using largest window %p (area %ld).\n", params.best, params.area);
-
-    return params.best;
-}
-
-/* Create a child window inside the game window instead of using the game
- * window itself. Attaching a second d3d9 device and swapchain to the window
- * the game already draws into makes the game lose that window and continue in
- * a new top-level one, which is exactly the black-window-plus-new-window the
- * user sees. A child window leaves the parent's device alone and still puts
- * the video inside the game window. */
-static HWND video_presenter_create_child_window(HWND parent)
-{
-    RECT rect;
-
-    if (!GetClientRect(parent, &rect))
-        return NULL;
-
-    /* Stay hidden until a frame is actually presented, otherwise the game UI
-     * would be covered by an empty window while no video is playing. */
-    return CreateWindowExW(0, L"static", L"", WS_CHILD, 0, 0,
-            rect.right - rect.left, rect.bottom - rect.top, parent, NULL, NULL, NULL);
-}
-
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 {
 
@@ -2458,38 +2317,25 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     HWND window;
     HRESULT hr;
 
-    /* Present into the window the application gave us in SetVideoWindow().
-     * Before that call arrives, use a hidden host window rather than the
-     * desktop: the device window is fixed at creation time, and a
-     * desktop-attached device makes DXVK flash a fullscreen window before
-     * SetVideoWindow() recreates the device for the real target. */
+    /* No destination window yet: do not create a d3d device at all.
+     *
+     * Creating one here used to happen as soon as the presenter was created,
+     * which is the moment decoding starts. A second d3d9 device in a process
+     * that already has one (the game itself) makes DXVK lose the first
+     * device's swapchain: the game's own window goes black and the engine
+     * carries on in a newly created window.
+     *
+     * A presenter without a video window cannot present anything anyway, so
+     * wait for SetVideoWindow() before touching d3d. */
     if (!presenter->video_window)
     {
-        HWND child = video_presenter_create_child_window(video_presenter_find_main_window());
-
-        if (child)
-        {
-            WARN("init_d3d: created child window %p.\n", child);
-            presenter->video_window = child;
-            presenter->video_window_fallback = TRUE;
-        }
+        WARN("init_d3d: no video window, deferring device creation.\n");
+        return S_OK;
     }
 
-    /* The device window is fixed at creation time and IDirect3D9::CreateDevice
-     * also creates an implicit swapchain on it. When the destination is a
-     * window we picked ourselves, create the device against the hidden host
-     * window instead and let the additional swapchain created below target the
-     * real one; otherwise DXVK maps a visible window for the implicit
-     * swapchain and a second window appears next to the game. */
-    if (presenter->video_window && !presenter->video_window_fallback)
-        window = presenter->video_window;
-    else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
-        window = presenter->host_window;
-    else
-        window = GetDesktopWindow();
+    window = presenter->video_window;
 
-    WARN("init_d3d: video_window %p, device window %p, host_window %p.\n",
-            presenter->video_window, window, presenter->host_window);
+    WARN("init_d3d: video_window %p, device window %p.\n", presenter->video_window, window);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
@@ -2530,7 +2376,7 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
      * one that never supplies a window at all, would otherwise keep
      * presenter->swapchain NULL and every presented sample would be dropped
      * with "No swapchain". */
-    if (SUCCEEDED(hr) && presenter->video_window && !presenter->video_window_fallback)
+    if (SUCCEEDED(hr) && presenter->video_window)
     {
         HRESULT swapchain_hr = video_presenter_create_swapchain(presenter);
 
