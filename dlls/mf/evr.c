@@ -401,7 +401,9 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
         static int diag_samples;
 
         if (diag_samples++ < 3)
-            WARN("ProcessSample reached the video sink, sample %p.\n", sample);
+            WARN("ProcessSample reached the video sink, sample %p, state %u, flags %#x, clock %p.\n",
+                    sample, stream->parent ? stream->parent->state : 0xffffffff,
+                    stream->flags, stream->parent ? stream->parent->clock : NULL);
     }
 
     EnterCriticalSection(&stream->cs);
@@ -1526,6 +1528,8 @@ static HRESULT WINAPI video_renderer_preroll_NotifyPreroll(IMFMediaSinkPreroll *
 
     TRACE("%p, %s.\n", iface, debugstr_time(start_time));
 
+    WARN("NotifyPreroll: start_time %s, stream_count %u.\n", debugstr_time(start_time), renderer->stream_count);
+
     EnterCriticalSection(&renderer->cs);
     if (renderer->flags & EVR_SHUT_DOWN)
         hr = MF_E_SHUTDOWN;
@@ -1935,6 +1939,8 @@ static HRESULT WINAPI video_renderer_clock_sink_OnClockStart(IMFClockStateSink *
     EnterCriticalSection(&renderer->cs);
 
     state = renderer->state;
+
+    WARN("OnClockStart: previous state %u.\n", state);
 
     /* Update sink state before sending sample requests, to avoid potentially receiving new sample in stopped state */
     renderer->state = EVR_STATE_RUNNING;
