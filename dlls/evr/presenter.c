@@ -2375,21 +2375,33 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
      * desktop: the device window is fixed at creation time, and a
      * desktop-attached device makes DXVK flash a fullscreen window before
      * SetVideoWindow() recreates the device for the real target. */
-    if (presenter->video_window)
-        window = presenter->video_window;
-    else if ((window = video_presenter_create_child_window(video_presenter_find_main_window())))
+    if (!presenter->video_window)
     {
-        WARN("init_d3d: created child window %p.\n", window);
-        presenter->video_window = window;
-        presenter->video_window_fallback = TRUE;
+        HWND child = video_presenter_create_child_window(video_presenter_find_main_window());
+
+        if (child)
+        {
+            WARN("init_d3d: created child window %p.\n", child);
+            presenter->video_window = child;
+            presenter->video_window_fallback = TRUE;
+        }
     }
+
+    /* The device window is fixed at creation time and IDirect3D9::CreateDevice
+     * also creates an implicit swapchain on it. When the destination is a
+     * window we picked ourselves, create the device against the hidden host
+     * window instead and let the additional swapchain created below target the
+     * real one; otherwise DXVK maps a visible window for the implicit
+     * swapchain and a second window appears next to the game. */
+    if (presenter->video_window && !presenter->video_window_fallback)
+        window = presenter->video_window;
     else if (presenter->host_window || (presenter->host_window = video_presenter_create_host_window()))
         window = presenter->host_window;
     else
         window = GetDesktopWindow();
 
-    WARN("init_d3d: video_window %p, host_window %p, using %p.\n",
-            presenter->video_window, presenter->host_window, window);
+    WARN("init_d3d: video_window %p, device window %p, host_window %p.\n",
+            presenter->video_window, window, presenter->host_window);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
