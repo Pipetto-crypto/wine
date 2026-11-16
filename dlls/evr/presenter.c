@@ -554,6 +554,9 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
             dumped = TRUE;
             WARN("Presenting into %p, dumping windows now.\n", presenter->video_window);
             EnumWindows(dump_present_windows_cb, 0);
+
+            if (presenter->video_window_fallback)
+                ShowWindow(presenter->video_window, SW_SHOW);
         }
     }
 
@@ -2315,6 +2318,25 @@ static HWND video_presenter_find_main_window(void)
     return params.best;
 }
 
+/* Create a child window inside the game window instead of using the game
+ * window itself. Attaching a second d3d9 device and swapchain to the window
+ * the game already draws into makes the game lose that window and continue in
+ * a new top-level one, which is exactly the black-window-plus-new-window the
+ * user sees. A child window leaves the parent's device alone and still puts
+ * the video inside the game window. */
+static HWND video_presenter_create_child_window(HWND parent)
+{
+    RECT rect;
+
+    if (!GetClientRect(parent, &rect))
+        return NULL;
+
+    /* Stay hidden until a frame is actually presented, otherwise the game UI
+     * would be covered by an empty window while no video is playing. */
+    return CreateWindowExW(0, L"static", L"", WS_CHILD, 0, 0,
+            rect.right - rect.left, rect.bottom - rect.top, parent, NULL, NULL, NULL);
+}
+
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 {
 
@@ -2331,9 +2353,9 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
      * SetVideoWindow() recreates the device for the real target. */
     if (presenter->video_window)
         window = presenter->video_window;
-    else if ((window = video_presenter_find_main_window()))
+    else if ((window = video_presenter_create_child_window(video_presenter_find_main_window())))
     {
-        WARN("init_d3d: no video window, using main window %p.\n", window);
+        WARN("init_d3d: created child window %p.\n", window);
         presenter->video_window = window;
         presenter->video_window_fallback = TRUE;
     }
