@@ -30,6 +30,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
 
+static BOOL CALLBACK dump_window_cb(HWND hwnd, LPARAM lparam);
+
 enum video_renderer_flags
 {
     EVR_SHUT_DOWN = 0x1,
@@ -425,7 +427,20 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
         }
 
         {
-            HRESULT input_hr = IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0);
+            static unsigned int diag_count;
+            HRESULT input_hr;
+
+            /* Dump the process windows again once playback is well under way.
+             * The dump taken when the renderer receives its first event only
+             * shows the game window, so a window created later is invisible
+             * to it. */
+            if (++diag_count == 200)
+            {
+                WARN("Dumping windows 200 samples in.\n");
+                EnumWindows(dump_window_cb, 0);
+            }
+
+            input_hr = IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0);
 
             if (FAILED(input_hr))
             {
