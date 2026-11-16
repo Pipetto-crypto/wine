@@ -2386,11 +2386,23 @@ Window create_client_window( HWND hwnd, RECT client_rect, const XVisualInfo *vis
                                                CWBackingStore | CWColormap | CWBorderPixel, &attr );
     if (data->client_window)
     {
-        XMapWindow( gdi_display, data->client_window );
         if (data->whole_window)
         {
+            XMapWindow( gdi_display, data->client_window );
             XFlush( gdi_display ); /* make sure client_window is created for XSelectInput */
             client_window_events_enable( data, data->client_window );
+        }
+        else
+        {
+            /* No host window, so the client window was created under the dummy
+             * parent and is not part of anything that can be displayed. Mapping
+             * it here makes it show up on its own at the surface size, because
+             * the dummy parent being 1x1 does not hide it when the X server
+             * does not clip children to the parent geometry. Presenting to an
+             * unmapped window works fine, so leave it unmapped until there is
+             * a real parent to attach it to. */
+            TRACE( "%p no whole window, leaving client window %lx unmapped\n",
+                   data->hwnd, data->client_window );
         }
         TRACE( "%p xwin %lx/%lx\n", data->hwnd, data->whole_window, data->client_window );
     }
