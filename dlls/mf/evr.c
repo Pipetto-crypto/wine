@@ -424,8 +424,18 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
             stream->flags |= EVR_STREAM_STARTED;
         }
 
-        if (SUCCEEDED(IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0)))
         {
+            HRESULT input_hr = IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0);
+
+            if (FAILED(input_hr))
+            {
+                static int diag_input_fail;
+
+                if (diag_input_fail++ < 3)
+                    WARN("Mixer refused input %u, hr %#lx.\n", stream->id, input_hr);
+            }
+
+            if (SUCCEEDED(input_hr))
             while ((hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0)) == MF_E_TRANSFORM_TYPE_NOT_SET)
             {
                 if (FAILED(hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))

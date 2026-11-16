@@ -685,7 +685,31 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
         return MF_E_SHUTDOWN;
 
     if (!presenter->media_type)
+    {
+        /* The media type is normally installed by INVALIDATEMEDIATYPE, but
+         * that handshake can be missed when the mixer already has its output
+         * type. Without a media type this function silently returns and the
+         * mixer output is never pulled, so the window stays black forever.
+         * Take the type from the mixer instead of giving up. */
+        IMFMediaType *type;
+
+        if (SUCCEEDED(IMFTransform_GetOutputCurrentType(presenter->mixer, 0, &type)))
+        {
+            WARN("process_input: no media type, taking it from the mixer.\n");
+            video_presenter_set_media_type(presenter, type);
+            IMFMediaType_Release(type);
+        }
+    }
+
+    if (!presenter->media_type)
+    {
+        static int diag_no_type;
+
+        if (diag_no_type++ < 3)
+            WARN("process_input: still no media type, nothing to mix.\n");
+
         return S_OK;
+    }
 
     while (hr == S_OK)
     {
