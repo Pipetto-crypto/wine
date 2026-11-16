@@ -817,6 +817,7 @@ static HRESULT WINAPI video_presenter_inner_QueryInterface(IUnknown *iface, REFI
     }
     else if (IsEqualIID(riid, &IID_IMFVideoDisplayControl))
     {
+        WARN("presenter: IMFVideoDisplayControl requested.\n");
         *obj = &presenter->IMFVideoDisplayControl_iface;
     }
     else if (IsEqualIID(riid, &IID_IMFRateSupport))
@@ -1334,6 +1335,13 @@ static HRESULT WINAPI video_presenter_control_SetVideoPosition(IMFVideoDisplayCo
     HRESULT hr = S_OK;
 
     TRACE("%p, %s, %s.\n", iface, debugstr_normalized_rect(src_rect), wine_dbgstr_rect(dst_rect));
+
+    {
+        static int diag_count;
+
+        if (diag_count++ < 5)
+            WARN("SetVideoPosition %s, video_window %p.\n", wine_dbgstr_rect(dst_rect), presenter->video_window);
+    }
 
     if (!src_rect && !dst_rect)
         return E_POINTER;
