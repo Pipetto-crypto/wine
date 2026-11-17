@@ -137,49 +137,7 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
     ClientToScreen(presenter->window, &point);
     OffsetRect(&rect, point.x, point.y);
 
-    if (IsRectEmpty(&rect))
-    {
-        /* The clipping window never got a size, so there is no rectangle to
-         * present to. Fall back to the whole primary surface: showing the frame
-         * somewhere beats dropping every single one of them. */
-        if (!presenter->logged_empty_rect)
-        {
-            WARN("Empty destination rect, window %p, position %ld,%ld.\n",
-                    presenter->window, point.x, point.y);
-            presenter->logged_empty_rect = TRUE;
-        }
-        if (FAILED(IDirectDrawSurface7_GetSurfaceDesc(presenter->primary, &desc)))
-            return S_OK;
-        SetRect(&rect, 0, 0, desc.dwWidth, desc.dwHeight);
-    }
 
-    /* The destination rect is in screen coordinates, and the primary surface is
-     * not necessarily as large as the screen: a window that is bigger than the
-     * surface, or partly outside it, gives ddraw a rect it rejects outright with
-     * DDERR_INVALIDRECT, and then nothing is ever presented at all. Clip it, the
-     * way a real driver would. */
-    if (SUCCEEDED(IDirectDrawSurface7_GetSurfaceDesc(presenter->primary, &desc)))
-    {
-        RECT surface_rect = { 0, 0, desc.dwWidth, desc.dwHeight };
-
-        if (!IntersectRect(&rect, &rect, &surface_rect))
-        {
-            if (!presenter->logged_invalid_rect)
-            {
-                WARN("Destination rect outside primary surface %lux%lu, window %p.\n",
-                        desc.dwWidth, desc.dwHeight, presenter->window);
-                presenter->logged_invalid_rect = TRUE;
-            }
-            return S_OK;
-        }
-    }
-
-    {
-        static unsigned int diag_present;
-        if (!(++diag_present % 120))
-            WARN("diag: present #%u rect %s, window %p, primary %p.\n",
-                    diag_present, wine_dbgstr_rect(&rect), presenter->window, presenter->primary);
-    }
     if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
     {
         DDSURFACEDESC2 src_desc, dst_desc;
