@@ -60,9 +60,8 @@ struct FvfToDecl
 
 #define DDRAW_STRIDE_ALIGNMENT  8
 
-#define DDRAW_WINED3D_FLAGS     (WINED3D_LEGACY_DEPTH_BIAS | WINED3D_RESTORE_MODE_ON_ACTIVATE \
-        | WINED3D_FOCUS_MESSAGES | WINED3D_PIXEL_CENTER_INTEGER | WINED3D_LEGACY_UNBOUND_RESOURCE_COLOR \
-        | WINED3D_NO_PRIMITIVE_RESTART | WINED3D_LEGACY_CUBEMAP_FILTERING | WINED3D_NO_DRAW_INDIRECT)
+#define DDRAW_WINED3D_FLAGS     (WINED3D_LEGACY_DEPTH_BIAS \
+        | WINED3D_RESTORE_MODE_ON_ACTIVATE | WINED3D_FOCUS_MESSAGES)
 
 #define DDRAW_WINED3D_SWAPCHAIN_FLAGS (WINED3D_SWAPCHAIN_ALLOW_MODE_SWITCH \
         | WINED3D_SWAPCHAIN_IMPLICIT | WINED3D_SWAPCHAIN_REGISTER_TOPMOST_TIMER)
@@ -191,6 +190,7 @@ struct ddraw_surface
     struct ddraw_surface *next_attached;
     struct ddraw_surface *first_attached;
     IUnknown                *attached_iface;
+    DWORD attach_saved_caps;
 
     /* Complex surfaces are organized in a tree, although the tree is degenerated to a list in most cases.
      * In mipmap and primary surfaces each level has only one attachment, which is the next surface level.
@@ -199,10 +199,8 @@ struct ddraw_surface
      */
 #define MAX_COMPLEX_ATTACHED 6
     struct ddraw_surface *complex_array[MAX_COMPLEX_ATTACHED];
-    /* You can't traverse the tree upwards. Only a flag for Surface::Release because it's needed there,
-     * but no pointer to prevent temptations to traverse it in the wrong direction.
-     */
-    unsigned int is_root : 1;
+    unsigned int is_implicit : 1;
+    unsigned int is_flip_chain_start : 1;
     unsigned int is_lost : 1;
     unsigned int sysmem_fallback : 1;
 
@@ -488,14 +486,12 @@ struct d3d_material
 
     /* IDirect3DMaterial2 fields */
     struct ddraw *ddraw;
-    struct d3d_device *active_device;
-
     D3DMATERIAL mat;
     DWORD Handle;
 };
 
 /* Helper functions */
-void material_activate(struct d3d_material *material);
+void material_activate(struct d3d_device *device, struct d3d_material *material);
 struct d3d_material *d3d_material_create(struct ddraw *ddraw);
 
 enum ddraw_viewport_version
@@ -560,7 +556,7 @@ struct d3d_execute_buffer
 
     /* This buffer will store the transformed vertices */
     unsigned int         index_size, index_pos;
-    unsigned int         vertex_size, src_vertex_pos;
+    unsigned int         vertex_size;
     struct wined3d_buffer *src_vertex_buffer, *dst_vertex_buffer, *index_buffer;
 
     /* This flags is set to TRUE if we allocated ourselves the
