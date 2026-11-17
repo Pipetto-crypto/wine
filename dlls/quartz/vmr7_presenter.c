@@ -174,6 +174,12 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         }
     }
 
+    {
+        static unsigned int diag_present;
+        if (!(++diag_present % 120))
+            WARN("diag: present #%u rect %s, window %p, primary %p.\n",
+                    diag_present, wine_dbgstr_rect(&rect), presenter->window, presenter->primary);
+    }
     if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
     {
         DDSURFACEDESC2 src_desc, dst_desc;

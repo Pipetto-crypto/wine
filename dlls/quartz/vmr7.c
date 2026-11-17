@@ -234,6 +234,17 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
         return hr;
     }
 
+    {
+        /* Diagnostic: is the sample we get actually picture data, and does the
+         * rendering surface have the format we assume? */
+        static unsigned int diag_count;
+        if (!(++diag_count % 120))
+            WARN("diag: sample #%u %u bytes, src %ux%u %u bpp comp %#x, dst %lux%lu pitch %lu bpp %lu fourcc %#lx, first %02x%02x%02x%02x.\n",
+                    diag_count, data_size, width, height, depth, bitmap_header->biCompression,
+                    surface_desc.dwWidth, surface_desc.dwHeight, surface_desc.lPitch,
+                    surface_desc.ddpfPixelFormat.dwRGBBitCount, surface_desc.ddpfPixelFormat.dwFourCC,
+                    data[0], data[1], data[2], data[3]);
+    }
     if (width > surface_desc.dwWidth || abs(height)  > surface_desc.dwHeight)
     {
         FIXME("src surface (%ux%u) larger than rendering surface (%lux%lu).\n", width, height,
