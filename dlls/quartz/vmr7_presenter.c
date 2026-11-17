@@ -139,13 +139,18 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
 
     if (IsRectEmpty(&rect))
     {
+        /* The clipping window never got a size, so there is no rectangle to
+         * present to. Fall back to the whole primary surface: showing the frame
+         * somewhere beats dropping every single one of them. */
         if (!presenter->logged_empty_rect)
         {
             WARN("Empty destination rect, window %p, position %ld,%ld.\n",
                     presenter->window, point.x, point.y);
             presenter->logged_empty_rect = TRUE;
         }
-        return S_OK;
+        if (FAILED(IDirectDrawSurface7_GetSurfaceDesc(presenter->primary, &desc)))
+            return S_OK;
+        SetRect(&rect, 0, 0, desc.dwWidth, desc.dwHeight);
     }
 
     /* The destination rect is in screen coordinates, and the primary surface is
