@@ -333,6 +333,16 @@ static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_
     if (bitmap_header->biCompression == BI_RGB || bitmap_header->biCompression == BI_BITFIELDS)
         return S_OK;
 
+    /* ddraw and wined3d know the YV12, NV12 and YUY2 fourccs, but not I420.
+     * Accepting it here gets as far as allocating surfaces and then fails every
+     * single blit with E_FAIL, which is a black picture with sound. Refuse it so
+     * that the graph negotiates a format that can actually be converted. */
+    if (bitmap_header->biCompression == MAKEFOURCC('I', '4', '2', '0'))
+    {
+        WARN("Refusing I420, it cannot be blitted.\n");
+        return S_FALSE;
+    }
+
     if (!ddraw)
     {
         if (FAILED(DirectDrawCreateEx(NULL, (void **)&ddraw, &IID_IDirectDraw7, NULL)))
