@@ -307,11 +307,22 @@ static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_
             && !IsEqualGUID(&mt->formattype, &FORMAT_VideoInfo2))
         return S_FALSE;
 
-    /* Accept YUV as well. Refusing it does not make the decoder convert, the
-     * parser only ever offers the formats the decoder produces, so every
-     * connection attempt fails and the video pin is left unconnected: a black
-     * picture with sound and not a single call to PresentImage. */
-    return S_OK;
+    /* Planar YUV cannot be turned into a wined3d texture by this tree: I420,
+     * YV12 and NV12 are not in its format table, so surface allocation fails
+     * with D3DERR_INVALIDCALL and the connection itself fails with E_INVALIDARG,
+     * leaving a black picture with sound. Refuse them and let the graph fall
+     * back to ARGB32, which is what it connects with anyway. */
+    switch (bitmap_header->biCompression)
+    {
+        case mmioFOURCC('I','4','2','0'):
+        case mmioFOURCC('Y','V','1','2'):
+        case mmioFOURCC('N','V','1','2'):
+            WARN("Refusing planar YUV format %#x, wined3d cannot allocate it.\n",
+                    bitmap_header->biCompression);
+            return S_FALSE;
+        default:
+            return S_OK;
+    }
 }
 
 static HRESULT initialize_device(struct vmr7 *filter, VMRALLOCATIONINFO *info, DWORD count)
