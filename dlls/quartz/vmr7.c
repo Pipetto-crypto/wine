@@ -296,17 +296,11 @@ static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_
             && !IsEqualGUID(&mt->formattype, &FORMAT_VideoInfo2))
         return S_FALSE;
 
-    if (bitmap_header->biCompression == BI_RGB || bitmap_header->biCompression == BI_BITFIELDS)
-        return S_OK;
-
-    /* Blitting a YUV surface to the RGB primary surface fails with E_FAIL, for
-     * every YUV format tried: I420 and YV12 both allocate surfaces happily and
-     * then drop every single frame, which is a black picture with sound. Only
-     * accept RGB, so that the decoder converts and the presenter is left with a
-     * plain RGB copy. */
-    WARN("Refusing non-RGB compression %#x, it cannot be blitted.\n",
-            bitmap_header->biCompression);
-    return S_FALSE;
+    /* Accept YUV as well. Refusing it does not make the decoder convert, the
+     * parser only ever offers the formats the decoder produces, so every
+     * connection attempt fails and the video pin is left unconnected: a black
+     * picture with sound and not a single call to PresentImage. */
+    return S_OK;
 }
 
 static HRESULT initialize_device(struct vmr7 *filter, VMRALLOCATIONINFO *info, DWORD count)
