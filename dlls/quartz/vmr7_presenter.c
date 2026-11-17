@@ -175,7 +175,22 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
     }
 
     if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
-        ERR("Failed to blit, hr %#lx, rect %s.\n", hr, wine_dbgstr_rect(&rect));
+    {
+        DDSURFACEDESC2 src_desc, dst_desc;
+
+        src_desc.dwSize = sizeof(src_desc);
+        dst_desc.dwSize = sizeof(dst_desc);
+        if (SUCCEEDED(IDirectDrawSurface7_GetSurfaceDesc(info->lpSurf, &src_desc))
+                && SUCCEEDED(IDirectDrawSurface7_GetSurfaceDesc(presenter->primary, &dst_desc)))
+            ERR("Failed to blit, hr %#lx, rect %s, src %#lx %lux%lu bpp %lu, dst %#lx %lux%lu bpp %lu.\n",
+                    hr, wine_dbgstr_rect(&rect),
+                    src_desc.ddpfPixelFormat.dwFourCC ? src_desc.ddpfPixelFormat.dwFourCC : src_desc.ddpfPixelFormat.dwRGBBitCount,
+                    src_desc.dwWidth, src_desc.dwHeight, src_desc.ddpfPixelFormat.dwRGBBitCount,
+                    dst_desc.ddpfPixelFormat.dwFourCC ? dst_desc.ddpfPixelFormat.dwFourCC : dst_desc.ddpfPixelFormat.dwRGBBitCount,
+                    dst_desc.dwWidth, dst_desc.dwHeight, dst_desc.ddpfPixelFormat.dwRGBBitCount);
+        else
+            ERR("Failed to blit, hr %#lx, rect %s.\n", hr, wine_dbgstr_rect(&rect));
+    }
 
     return S_OK;
 }
