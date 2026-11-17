@@ -1836,9 +1836,15 @@ static HRESULT get_raw_media_type(struct wg_format *format, unsigned int index, 
 {
     static const enum wg_video_format video_formats[] =
     {
-        /* Try to prefer YUV formats over RGB ones. Most decoders output in the
-         * YUV color space, and it's generally much less expensive for
-         * videoconvert to do YUV -> YUV transformations. */
+        /* Offer RGB before YUV. Upstream prefers YUV because most decoders
+         * output it and videoconvert is cheaper that way, but that assumes the
+         * downstream filter takes YUV at all. ddraw's primary surface does not
+         * here: every YUV format is refused with VFW_E_TYPE_NOT_ACCEPTED and,
+         * depending on how far the enumeration is driven, the pin is left
+         * unconnected, which is a black picture with sound. Offer the formats
+         * that actually connect first. */
+        WG_VIDEO_FORMAT_BGRA,
+        WG_VIDEO_FORMAT_BGRx,
         WG_VIDEO_FORMAT_AYUV,
         WG_VIDEO_FORMAT_I420,
         WG_VIDEO_FORMAT_YV12,
@@ -1846,8 +1852,6 @@ static HRESULT get_raw_media_type(struct wg_format *format, unsigned int index, 
         WG_VIDEO_FORMAT_UYVY,
         WG_VIDEO_FORMAT_YVYU,
         WG_VIDEO_FORMAT_NV12,
-        WG_VIDEO_FORMAT_BGRA,
-        WG_VIDEO_FORMAT_BGRx,
         WG_VIDEO_FORMAT_BGR,
         WG_VIDEO_FORMAT_RGB16,
         WG_VIDEO_FORMAT_RGB15,
