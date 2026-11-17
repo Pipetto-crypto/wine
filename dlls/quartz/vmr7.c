@@ -285,43 +285,9 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
     return IVMRImagePresenter_PresentImage(filter->presenter, filter->cookie, &info);
 }
 
-static BOOL fourcc_is_supported(IDirectDraw7 *ddraw, DWORD fourcc)
-{
-    DWORD *codes, count, i;
-    HRESULT hr;
-
-    if (FAILED(hr = IDirectDraw7_GetFourCCCodes(ddraw, &count, NULL)))
-    {
-        ERR("Failed to get FOURCC code count, hr %#lx.\n", hr);
-        return FALSE;
-    }
-
-    if (!count || !(codes = calloc(count, sizeof(*codes))))
-        return FALSE;
-
-    if (FAILED(hr = IDirectDraw7_GetFourCCCodes(ddraw, &count, codes)))
-    {
-        ERR("Failed to get FOURCC codes, hr %#lx.\n", hr);
-        free(codes);
-        return FALSE;
-    }
-
-    for (i = 0; i < count; ++i)
-    {
-        if (codes[i] == fourcc)
-            break;
-    }
-    free(codes);
-
-    return i < count;
-}
-
 static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_TYPE *mt)
 {
-    struct vmr7 *filter = impl_from_IBaseFilter(&iface->filter.IBaseFilter_iface);
     const BITMAPINFOHEADER *bitmap_header = get_bitmap_header(mt);
-    IDirectDraw7 *ddraw = filter->ddraw;
-    HRESULT hr = S_OK;
 
     if (!IsEqualIID(&mt->majortype, &MEDIATYPE_Video) || !mt->pbFormat)
         return S_FALSE;
@@ -333,29 +299,14 @@ static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_
     if (bitmap_header->biCompression == BI_RGB || bitmap_header->biCompression == BI_BITFIELDS)
         return S_OK;
 
-    /* ddraw and wined3d know the YV12, NV12 and YUY2 fourccs, but not I420.
-     * Accepting it here gets as far as allocating surfaces and then fails every
-     * single blit with E_FAIL, which is a black picture with sound. Refuse it so
-     * that the graph negotiates a format that can actually be converted. */
-    if (bitmap_header->biCompression == MAKEFOURCC('I', '4', '2', '0'))
-    {
-        WARN("Refusing I420, it cannot be blitted.\n");
-        return S_FALSE;
-    }
-
-    if (!ddraw)
-    {
-        if (FAILED(DirectDrawCreateEx(NULL, (void **)&ddraw, &IID_IDirectDraw7, NULL)))
-            return S_FALSE;
-    }
-
-    if (!fourcc_is_supported(ddraw, bitmap_header->biCompression))
-        hr = S_FALSE;
-
-    if (ddraw != filter->ddraw)
-        IDirectDraw7_Release(ddraw);
-
-    return hr;
+    /* Blitting a YUV surface to the RGB primary surface fails with E_FAIL, for
+     * every YUV format tried: I420 and YV12 both allocate surfaces happily and
+     * then drop every single frame, which is a black picture with sound. Only
+     * accept RGB, so that the decoder converts and the presenter is left with a
+     * plain RGB copy. */
+    WARN("Refusing non-RGB compression %#x, it cannot be blitted.\n",
+            bitmap_header->biCompression);
+    return S_FALSE;
 }
 
 static HRESULT initialize_device(struct vmr7 *filter, VMRALLOCATIONINFO *info, DWORD count)
