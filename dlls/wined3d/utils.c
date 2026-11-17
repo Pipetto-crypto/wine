@@ -65,6 +65,7 @@ format_index_remap[] =
     {WINED3DFMT_AL16,         WINED3D_FORMAT_FOURCC_BASE + 21},
     {WINED3DFMT_NV12,         WINED3D_FORMAT_FOURCC_BASE + 22},
     {WINED3DFMT_ATOC,         WINED3D_FORMAT_FOURCC_BASE + 23},
+    {WINED3DFMT_I420,         WINED3D_FORMAT_FOURCC_BASE + 24},
 };
 
 #define WINED3D_FORMAT_COUNT (WINED3D_FORMAT_FOURCC_BASE + ARRAY_SIZE(format_index_remap))
@@ -88,6 +89,7 @@ static const struct wined3d_format_channels formats[] =
     {WINED3DFMT_UYVY,                       0,  0,  0,  0,   0,  0,  0,  0,    2,   0,  0},
     {WINED3DFMT_YUY2,                       0,  0,  0,  0,   0,  0,  0,  0,    2,   0,  0},
     {WINED3DFMT_YV12,                       0,  0,  0,  0,   0,  0,  0,  0,    1,   0,  0},
+    {WINED3DFMT_I420,                       0,  0,  0,  0,   0,  0,  0,  0,    1,   0,  0},
     {WINED3DFMT_NV12,                       0,  0,  0,  0,   0,  0,  0,  0,    1,   0,  0},
     {WINED3DFMT_NV12_PLANAR,                0,  0,  0,  0,   0,  0,  0,  0,    1,   0,  0},
     {WINED3DFMT_DXT1,                       0,  0,  0,  0,   0,  0,  0,  0,    1,   0,  0},
@@ -1274,6 +1276,14 @@ static const struct wined3d_format_texture_info format_texture_info[] =
             WINED3D_FORMAT_CAP_FILTERING,
             ARB_TEXTURE_RG,             NULL},
     {WINED3DFMT_YV12,                   GL_ALPHA8,                        GL_ALPHA8,                              0,
+            GL_ALPHA,                   GL_UNSIGNED_BYTE,                 0,
+            WINED3D_FORMAT_CAP_FILTERING,
+            WINED3D_GL_LEGACY_CONTEXT,  NULL},
+    {WINED3DFMT_I420,                   GL_R8,                            GL_R8,                                  0,
+            GL_RED,                     GL_UNSIGNED_BYTE,                 0,
+            WINED3D_FORMAT_CAP_FILTERING,
+            ARB_TEXTURE_RG,             NULL},
+    {WINED3DFMT_I420,                   GL_ALPHA8,                        GL_ALPHA8,                              0,
             GL_ALPHA,                   GL_UNSIGNED_BYTE,                 0,
             WINED3D_FORMAT_CAP_FILTERING,
             WINED3D_GL_LEGACY_CONTEXT,  NULL},
@@ -4676,6 +4686,7 @@ const char *debug_d3dformat(enum wined3d_format_id format_id)
         FMT_TO_STR(WINED3DFMT_UYVY);
         FMT_TO_STR(WINED3DFMT_YUY2);
         FMT_TO_STR(WINED3DFMT_YV12);
+        FMT_TO_STR(WINED3DFMT_I420);
         FMT_TO_STR(WINED3DFMT_DXT1);
         FMT_TO_STR(WINED3DFMT_DXT2);
         FMT_TO_STR(WINED3DFMT_DXT3);
