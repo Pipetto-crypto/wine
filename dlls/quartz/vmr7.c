@@ -350,6 +350,28 @@ static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_
             return S_FALSE;
     }
 
+    {
+        DWORD cnt, n, list[32], k;
+        char buf[256];
+        WARN("QAPROBE fourcc %#lx (%c%c%c%c) filter_ddraw %p tmp_ddraw %p fmttype %s comp %u size %ux%u.\n",
+                (unsigned long)bitmap_header->biCompression,
+                (int)(bitmap_header->biCompression & 0xff),
+                (int)((bitmap_header->biCompression >> 8) & 0xff),
+                (int)((bitmap_header->biCompression >> 16) & 0xff),
+                (int)((bitmap_header->biCompression >> 24) & 0xff),
+                filter->ddraw, ddraw, wine_dbgstr_guid(&mt->formattype),
+                bitmap_header->biCompression, bitmap_header->biWidth, bitmap_header->biHeight);
+        cnt = 32;
+        if (SUCCEEDED(IDirectDraw7_GetFourCCCodes(ddraw, &cnt, list)))
+        {
+            buf[0] = 0;
+            for (n = 0, k = 0; n < cnt && k + 6 < sizeof(buf); ++n)
+                k += sprintf(buf + k, "%c%c%c%c ",
+                        (int)(list[n] & 0xff), (int)((list[n] >> 8) & 0xff),
+                        (int)((list[n] >> 16) & 0xff), (int)((list[n] >> 24) & 0xff));
+            WARN("QAPROBE ddraw codes (%lu): %s\n", (unsigned long)cnt, buf);
+        }
+    }
     if (!fourcc_is_supported(ddraw, bitmap_header->biCompression))
         hr = S_FALSE;
 
