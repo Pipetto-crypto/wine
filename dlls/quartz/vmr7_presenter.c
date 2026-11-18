@@ -113,8 +113,8 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         DWORD_PTR cookie, VMRPRESENTATIONINFO *info)
 {
     struct vmr7_presenter *presenter = impl_from_IVMRImagePresenter(iface);
-    DDSURFACEDESC2 desc;
-    POINT point;
+    HWND window = presenter->window;
+    POINT point = {0, 0};
     HRESULT hr;
     RECT rect;
 
@@ -127,16 +127,25 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
             wine_dbgstr_rect(&info->rcSrc), wine_dbgstr_rect(&info->rcDst),
             info->dwTypeSpecificFlags, info->dwInterlaceFlags);
 
-    desc.dwSize = sizeof(desc);
-
     if (info->dwFlags & VMRSample_SrcDstRectsValid)
         FIXME("Ignoring src/dst rects.\n");
 
-    GetClientRect(presenter->window, &rect);
-    point.x = point.y = 0;
-    ClientToScreen(presenter->window, &point);
+    if (!GetClientRect(window, &rect))
+    {
+        TRACE("Skipping frame: GetClientRect failed for window %p, error %lu.\n", window, GetLastError());
+        return S_OK;
+    }
+    if (IsRectEmpty(&rect))
+    {
+        TRACE("Skipping frame: empty client rect %s for window %p.\n", wine_dbgstr_rect(&rect), window);
+        return S_OK;
+    }
+    if (!ClientToScreen(window, &point))
+    {
+        TRACE("Skipping frame: ClientToScreen failed for window %p, error %lu.\n", window, GetLastError());
+        return S_OK;
+    }
     OffsetRect(&rect, point.x, point.y);
-
 
     if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
     {
