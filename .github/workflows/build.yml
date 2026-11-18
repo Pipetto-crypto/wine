@@ -242,9 +242,21 @@ jobs:
           rm -rf "${DEST}"
           mkdir -p "${DEST}"
           echo "GStreamer decoders: ${GST_REPO} @ ${GST_TAG}"
-          curl -fSL --retry 5 --retry-all-errors --max-time 900 \
-            -o /tmp/gst-decoders.tar.gz \
-            "https://github.com/${GST_REPO}/releases/download/${GST_TAG}/${ASSET}"
+          ASSET_URL="https://github.com/${GST_REPO}/releases/download/${GST_TAG}/${ASSET}"
+          for i in 1 2 3 4 5; do
+            echo "下载 GStreamer sysroot（第 ${i} 次尝试）"
+            if curl -fSL --retry 3 --retry-delay 5 --retry-all-errors \
+                --connect-timeout 30 --max-time 1800 \
+                -o /tmp/gst-decoders.tar.gz \
+                "${ASSET_URL}" && tar -tzf /tmp/gst-decoders.tar.gz >/dev/null 2>&1; then
+              echo "下载成功"
+              break
+            fi
+            echo "下载失败，${i}0 秒后重试..."
+            rm -f /tmp/gst-decoders.tar.gz
+            sleep $((i*10))
+          done
+          tar -tzf /tmp/gst-decoders.tar.gz >/dev/null 2>&1 || { echo "FATAL: GStreamer sysroot 下载反复失败"; exit 1; }
 
           tar -xzf /tmp/gst-decoders.tar.gz -C "${DEST}" --strip-components=1
           test -f "${DEST}/lib/pkgconfig/gstreamer-1.0.pc"
