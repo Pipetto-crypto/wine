@@ -1248,28 +1248,20 @@ static bool stream_create_post_processing_elements(GstPad *pad, struct wg_parser
     }
     else if (!strcmp(name, "video/x-raw"))
     {
-        /* Hack: Flatten colorimetry to defaults (Proton media-converter). */
-        if (!(element = create_element("capssetter", "good"))
+        /* decodebin doesn't provide framerate for raw video. This causes the
+         * deinterlace element to reject the caps. So go through
+         * videoconvert first (as it fixates the framerate), which also
+         * swaps color spaces to a format the renderer can handle. */
+        if (!(element = create_element("videoconvert", "base"))
                 || !append_element(parser->container, element, &first, &last))
             return false;
-        gst_util_set_object_arg(G_OBJECT(element), "join", "true");
-        gst_util_set_object_arg(G_OBJECT(element), "caps", "video/x-raw,colorimetry=0:0:0:0");
+        gst_util_set_object_arg(G_OBJECT(element), "n-threads", "0");
 
         /* DirectShow can express interlaced video, but downstream filters can't
          * necessarily consume it. In particular, the video renderer can't. */
         if (!(element = create_element("deinterlace", "good"))
                 || !append_element(parser->container, element, &first, &last))
             return false;
-
-        /* decodebin considers many YUV formats to be "raw", but some quartz
-         * filters can't handle those. Also, videoflip can't handle all "raw"
-         * formats either. Add a videoconvert to swap color spaces. */
-        if (!(element = create_element("videoconvert", "base"))
-                || !append_element(parser->container, element, &first, &last))
-            return false;
-
-        /* Let GStreamer choose a default number of threads. */
-        gst_util_set_object_arg(G_OBJECT(element), "n-threads", "0");
 
         /* GStreamer outputs RGB video top-down, but DirectShow expects bottom-up. */
         if (!(element = create_element("videoflip", "good"))
