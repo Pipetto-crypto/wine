@@ -131,8 +131,8 @@ jobs:
       - name: 安装构建依赖
         run: |
           set -e
-          sudo apt update
-          sudo apt --fix-broken install -y
+          sudo timeout 180 apt update || echo "apt update failed/timeout, using cached lists"
+          sudo timeout 300 apt --fix-broken install -y || true
 
           BASE_DEPS="\
             perl \
@@ -211,7 +211,7 @@ jobs:
         if: ${{ (github.event.inputs.enable_gstreamer || 'true') == 'true' }}
         run: |
           set -e
-          sudo apt update
+          sudo timeout 180 apt update || echo "apt update failed/timeout, using cached lists"
           sudo apt install -y \
             libunwind-dev \
             libgstreamer1.0-dev \
