@@ -238,6 +238,18 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
         /* Diagnostic: is the sample we get actually picture data, and does the
          * rendering surface have the format we assume? */
         static unsigned int diag_count;
+        {
+            unsigned int i, ymin = 255, ymax = 0, umin = 255, umax = 0, vmin = 255, vmax = 0;
+            unsigned long long ysum = 0;
+            unsigned int ysz = (width + 3) & ~3, ylen = ysz * abs(height);
+            unsigned int clen = ylen / 4;
+            const BYTE *p = data;
+            for (i = 0; i < ylen && i < data_size; ++i) { ysum += p[i]; if (p[i] < ymin) ymin = p[i]; if (p[i] > ymax) ymax = p[i]; }
+            for (i = 0; i < clen && ylen + i < data_size; ++i) { if (p[ylen + i] < umin) umin = p[ylen + i]; if (p[ylen + i] > umax) umax = p[ylen + i]; }
+            for (i = 0; i < clen && ylen + clen + i < data_size; ++i) { if (p[ylen + clen + i] < vmin) vmin = p[ylen + clen + i]; if (p[ylen + clen + i] > vmax) vmax = p[ylen + clen + i]; }
+            WARN("diag2: Y[%u..%u] avg %llu U[%u..%u] V[%u..%u] ylen %u clen %u size %u.\n",
+                    ymin, ymax, ylen ? ysum / ylen : 0, umin, umax, vmin, vmax, ylen, clen, data_size);
+        }
         if (!(++diag_count % 120))
             WARN("diag: sample #%u %u bytes, src %ux%u %u bpp comp %#x, dst %lux%lu pitch %lu bpp %lu fourcc %#lx, first %02x%02x%02x%02x.\n",
                     diag_count, data_size, width, height, depth, bitmap_header->biCompression,
