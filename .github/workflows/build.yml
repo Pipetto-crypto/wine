@@ -193,7 +193,7 @@ jobs:
             ccache \
             lld"
 
-          sudo apt install -y $BASE_DEPS
+          sudo timeout 600 apt install -y $BASE_DEPS || true
 
       # --------------------------------------------------------
       # 多媒体 / 音频依赖
