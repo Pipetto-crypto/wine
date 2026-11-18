@@ -1836,15 +1836,13 @@ static HRESULT get_raw_media_type(struct wg_format *format, unsigned int index, 
 {
     static const enum wg_video_format video_formats[] =
     {
-        /* Offer RGB before YUV. Upstream prefers YUV because most decoders
-         * output it and videoconvert is cheaper that way, but that assumes the
-         * downstream filter takes YUV at all. ddraw's primary surface does not
-         * here: every YUV format is refused with VFW_E_TYPE_NOT_ACCEPTED and,
-         * depending on how far the enumeration is driven, the pin is left
-         * unconnected, which is a black picture with sound. Offer the formats
-         * that actually connect first. */
-        WG_VIDEO_FORMAT_BGRA,
-        WG_VIDEO_FORMAT_BGRx,
+        /* Prefer YUV over RGB, matching upstream. A previous change moved BGRA
+         * to the front on the assumption that ddraw refuses every YUV format,
+         * but that is wrong: vmr_query_accept() accepts any FOURCC reported by
+         * IDirectDraw7_GetFourCCCodes(), and YV12 is in that list. I420 is
+         * refused by the VMR, and the next candidate YV12 then connects fine
+         * over the ddraw YUV path. Listing BGRA first skipped that path and
+         * forced a YUV->RGB conversion through videoconvert instead. */
         WG_VIDEO_FORMAT_AYUV,
         WG_VIDEO_FORMAT_I420,
         WG_VIDEO_FORMAT_YV12,
@@ -1852,6 +1850,8 @@ static HRESULT get_raw_media_type(struct wg_format *format, unsigned int index, 
         WG_VIDEO_FORMAT_UYVY,
         WG_VIDEO_FORMAT_YVYU,
         WG_VIDEO_FORMAT_NV12,
+        WG_VIDEO_FORMAT_BGRA,
+        WG_VIDEO_FORMAT_BGRx,
         WG_VIDEO_FORMAT_BGR,
         WG_VIDEO_FORMAT_RGB16,
         WG_VIDEO_FORMAT_RGB15,
