@@ -146,6 +146,11 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
     if (ddraw->swapchain_window && (!(ddraw->cooperative_level & DDSCL_EXCLUSIVE)
             || ddraw->swapchain_window == GetForegroundWindow() || ddraw_gdi_is_front(ddraw)))
     {
+        TRACE("frontbuffer path=swapchain surface %p caps %#lx coop %#lx swapchain_window %p foreground %p gdi_front %d rect %s read %d swap_interval %u.\n",
+                surface, surface->surface_desc.ddsCaps.dwCaps, ddraw->cooperative_level,
+                ddraw->swapchain_window, GetForegroundWindow(), ddraw_gdi_is_front(ddraw),
+                wine_dbgstr_rect(rect), read, swap_interval);
+
         /* Nothing to do, we control the frontbuffer, or at least the parts we
          * care about. */
         if (read)
@@ -165,6 +170,11 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
         }
         return hr;
     }
+
+    TRACE("frontbuffer path=gdi surface %p caps %#lx coop %#lx swapchain_window %p foreground %p gdi_front %d rect %s read %d swap_interval %u.\n",
+            surface, surface->surface_desc.ddsCaps.dwCaps, ddraw->cooperative_level,
+            ddraw->swapchain_window, GetForegroundWindow(), ddraw_gdi_is_front(ddraw),
+            wine_dbgstr_rect(rect), read, swap_interval);
 
     wined3d_texture = ddraw_surface_get_default_texture(surface, read ? (rect ? DDRAW_SURFACE_RW : DDRAW_SURFACE_WRITE)
             : DDRAW_SURFACE_READ);

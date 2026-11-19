@@ -114,9 +114,16 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
 {
     struct vmr7_presenter *presenter = impl_from_IVMRImagePresenter(iface);
     HWND window = presenter->window;
+    static volatile LONG frame_count;
+    LONG current_frame;
+    BOOL test_pattern;
     POINT point = {0, 0};
     HRESULT hr;
     RECT rect;
+    char pattern_env[16];
+
+    test_pattern = GetEnvironmentVariableA("WINE_VMR7_TEST_PATTERN", pattern_env,
+            ARRAY_SIZE(pattern_env)) == 1 && pattern_env[0] == '1';
 
     TRACE("iface %p, cookie %#Ix, info %p.\n", iface, cookie, info);
 
@@ -147,7 +154,8 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
     }
     OffsetRect(&rect, point.x, point.y);
 
-    if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
+    hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL);
+    if (FAILED(hr))
     {
         DDSURFACEDESC2 src_desc, dst_desc;
 
@@ -164,6 +172,16 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         else
             ERR("Failed to blit, hr %#lx, rect %s.\n", hr, wine_dbgstr_rect(&rect));
     }
+
+    current_frame = InterlockedIncrement(&frame_count);
+    if (!(current_frame % 120))
+        WARN("presentcheck #%ld time %s source %p primary %p rect %s Blt hr %#lx.\n",
+                current_frame, (info->dwFlags & VMRSample_TimeValid) ? debugstr_time(info->rtStart) : "invalid",
+                info->lpSurf, presenter->primary, wine_dbgstr_rect(&rect), hr);
+    if (test_pattern && current_frame <= 30)
+        WARN("patternpresent #%ld time %s primary %p rect %s Blt hr %#lx.\n",
+                current_frame, (info->dwFlags & VMRSample_TimeValid) ? debugstr_time(info->rtStart) : "invalid",
+                presenter->primary, wine_dbgstr_rect(&rect), hr);
 
     return S_OK;
 }
