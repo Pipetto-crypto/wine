@@ -193,7 +193,8 @@ jobs:
             ccache \
             lld"
 
-          sudo timeout 600 apt install -y $BASE_DEPS || true
+          # Required headers must be installed before configure; never hide a timeout.
+          sudo timeout 1800 apt -o Acquire::Retries=3 install -y --no-install-recommends $BASE_DEPS
 
       # --------------------------------------------------------
       # 多媒体 / 音频依赖
@@ -212,13 +213,15 @@ jobs:
         run: |
           set -e
           sudo timeout 180 apt update || echo "apt update failed/timeout, using cached lists"
-          sudo timeout 600 apt install -y \
+          # The build needs development libraries, not every runtime codec/plugin.
+          sudo timeout 1200 apt -o Acquire::Retries=3 install -y --no-install-recommends \
             libunwind-dev \
+            libglib2.0-dev \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-* \
             libmpg123-dev \
-            libopenal-dev || true
+            libopenal-dev
+          pkg-config --exists glib-2.0 gobject-2.0 gstreamer-1.0 gstreamer-video-1.0
 
       # --------------------------------------------------------
       # GStreamer 头 sysroot
