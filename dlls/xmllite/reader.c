@@ -1092,10 +1092,10 @@ static HRESULT reader_more(xmlreader *reader)
         MultiByteToWideChar(cp, 0, src->data + src->cur, len, ptr, dest_len);
         ptr[dest_len] = 0;
         dest->written += dest_len*sizeof(WCHAR);
-        /* get rid of processed data */
-        readerinput_shrinkraw(readerinput, len);
     }
 
+    /* get rid of processed data */
+    readerinput_shrinkraw(readerinput, len);
     fixup_buffer_cr(dest, prev_len);
     return hr;
 }

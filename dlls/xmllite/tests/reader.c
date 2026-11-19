@@ -2226,6 +2226,66 @@ static void test_encoding_detection(void)
     IXmlReader_Release(reader);
 }
 
+static void test_read_utf16(void)
+{
+    static const unsigned int counts[] = {32, 4096};
+    IXmlReader *reader;
+    XmlNodeType type;
+    unsigned int i, j, bom;
+    WCHAR *xml, *ptr;
+    IStream *stream;
+    HRESULT hr;
+
+    hr = CreateXmlReader(&IID_IXmlReader, (void **)&reader, NULL);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    for (i = 0; i < ARRAY_SIZE(counts); ++i)
+    {
+        xml = malloc((4 * counts[i] + 14) * sizeof(*xml));
+        for (bom = 0; bom < 2; ++bom)
+        {
+            winetest_push_context("count %u, BOM %u", counts[i], bom);
+            ptr = xml;
+            if (bom) *ptr++ = 0xfeff;
+            memcpy(ptr, L"<root>", 6 * sizeof(*ptr));
+            ptr += 6;
+            for (j = 0; j < counts[i]; ++j)
+            {
+                memcpy(ptr, L"<a/>", 4 * sizeof(*ptr));
+                ptr += 4;
+            }
+            memcpy(ptr, L"</root>", 7 * sizeof(*ptr));
+            ptr += 7;
+            stream = create_stream_on_data(xml, (ptr - xml) * sizeof(*xml));
+            hr = IXmlReader_SetInput(reader, (IUnknown *)stream);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            IStream_Release(stream);
+
+            read_node(reader, XmlNodeType_Element);
+            reader_name(reader, L"root");
+            for (j = 0; j < counts[i]; ++j)
+            {
+                hr = IXmlReader_Read(reader, &type);
+                ok(hr == S_OK, "Node %u: unexpected hr %#lx.\n", j, hr);
+                if (hr != S_OK) break;
+                ok(type == XmlNodeType_Element, "Node %u: unexpected type %u.\n", j, type);
+                if (type != XmlNodeType_Element) break;
+                reader_name(reader, L"a");
+            }
+            if (j == counts[i])
+            {
+                read_node(reader, XmlNodeType_EndElement);
+                reader_name(reader, L"root");
+                read_node(reader, XmlNodeType_None);
+            }
+            winetest_pop_context();
+        }
+        free(xml);
+    }
+
+    IXmlReader_Release(reader);
+}
+
 static void test_eof_state(IXmlReader *reader, BOOL eof)
 {
     LONG_PTR state;
@@ -2694,6 +2754,7 @@ START_TEST(reader)
     test_namespaceuri();
     test_read_charref();
     test_encoding_detection();
+    test_read_utf16();
     test_endoffile();
     test_max_element_depth();
     test_reader_position();
