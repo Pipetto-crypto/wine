@@ -119,8 +119,16 @@ static HRESULT STDMETHODCALLTYPE d3d11_video_decoder_SetPrivateDataInterface(ID3
 static HRESULT STDMETHODCALLTYPE d3d11_video_decoder_GetCreationParameters(ID3D11VideoDecoder *iface,
         D3D11_VIDEO_DECODER_DESC *desc, D3D11_VIDEO_DECODER_CONFIG *config)
 {
-    FIXME("iface %p, desc %p, config %p, stub!\n", iface, desc, config);
-    return E_NOTIMPL;
+    struct d3d_video_decoder *decoder = impl_from_ID3D11VideoDecoder(iface);
+
+    TRACE("iface %p, desc %p, config %p.\n", iface, desc, config);
+
+    if (!desc || !config)
+        return E_INVALIDARG;
+
+    *desc = decoder->desc;
+    *config = decoder->config;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_video_decoder_GetDriverHandle(ID3D11VideoDecoder *iface, HANDLE *handle)
@@ -206,6 +214,8 @@ HRESULT d3d_video_decoder_create(struct d3d_device *device, const D3D11_VIDEO_DE
 
     wined3d_private_store_init(&object->private_store);
     object->device = device;
+    object->desc = *desc;
+    object->config = *config;
     ID3D11Device5_AddRef(&device->ID3D11Device5_iface);
 
     TRACE("Created video decoder %p.\n", object);
