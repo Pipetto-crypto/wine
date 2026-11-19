@@ -126,6 +126,38 @@ static HRESULT create_dinput_device( DWORD version, const GUID *guid, IDirectInp
     return hr;
 }
 
+static void test_sys_device_exclusive_background( DWORD version, const GUID *guid, HWND hwnd, BOOL keyboard )
+{
+    IDirectInputDevice8W *device;
+    HRESULT hr;
+
+    if (FAILED(create_dinput_device( version, guid, &device ))) return;
+
+    hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_EXCLUSIVE | DISCL_BACKGROUND );
+    if (keyboard)
+    {
+        todo_wine_if( version == 0x500 )
+        ok( hr == (version == 0x500 ? DIERR_INVALIDPARAM : DIERR_UNSUPPORTED),
+            "SetCooperativeLevel for %s returned %#lx\n", debugstr_guid( guid ), hr );
+    }
+    else ok( hr == DIERR_UNSUPPORTED, "SetCooperativeLevel for %s returned %#lx\n", debugstr_guid( guid ), hr );
+
+    hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_EXCLUSIVE | DISCL_FOREGROUND );
+    if (keyboard && version == 0x500)
+    {
+        todo_wine
+        ok( hr == DIERR_INVALIDPARAM, "Foreground exclusive SetCooperativeLevel for %s returned %#lx\n",
+            debugstr_guid( guid ), hr );
+    }
+    else ok( hr == DI_OK, "Foreground exclusive SetCooperativeLevel for %s returned %#lx\n",
+             debugstr_guid( guid ), hr );
+
+    hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND );
+    ok( hr == DI_OK, "Background nonexclusive SetCooperativeLevel for %s returned %#lx\n",
+        debugstr_guid( guid ), hr );
+    IDirectInputDevice8_Release( device );
+}
+
 static HKL activate_keyboard_layout( LANGID langid, HKL *old_hkl )
 {
     WCHAR hkl_name[64];
@@ -1455,6 +1487,9 @@ static void test_sys_mouse( DWORD version )
 
 
     hwnd = create_foreground_window( TRUE );
+
+    test_sys_device_exclusive_background( version, &GUID_SysMouseEm, hwnd, FALSE );
+    test_sys_device_exclusive_background( version, &GUID_SysMouseEm2, hwnd, FALSE );
 
     hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_FOREGROUND );
     ok( hr == DIERR_INVALIDPARAM, "SetCooperativeLevel returned %#lx\n", hr );
@@ -3047,6 +3082,9 @@ static void test_sys_keyboard( DWORD version )
 
 
     hwnd = create_foreground_window( FALSE );
+
+    test_sys_device_exclusive_background( version, &GUID_SysKeyboardEm, hwnd, TRUE );
+    test_sys_device_exclusive_background( version, &GUID_SysKeyboardEm2, hwnd, TRUE );
 
     hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_FOREGROUND );
     ok( hr == DIERR_INVALIDPARAM, "SetCooperativeLevel returned %#lx\n", hr );

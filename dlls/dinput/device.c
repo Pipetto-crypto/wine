@@ -574,7 +574,8 @@ static HRESULT WINAPI dinput_device_SetCooperativeLevel( IDirectInputDevice8W *i
     /* For security reasons native does not allow exclusive background level
        for mouse and keyboard only */
     if (flags & DISCL_EXCLUSIVE && flags & DISCL_BACKGROUND &&
-        (IsEqualGUID( &This->guid, &GUID_SysMouse ) || IsEqualGUID( &This->guid, &GUID_SysKeyboard )))
+        (IsEqualGUID( &This->instance.guidInstance, &GUID_SysMouse ) ||
+         IsEqualGUID( &This->instance.guidInstance, &GUID_SysKeyboard )))
         return DIERR_UNSUPPORTED;
 
     EnterCriticalSection(&This->crit);
