@@ -561,7 +561,12 @@ HRESULT vmr7_presenter_create(IUnknown *outer, IUnknown **out)
         ERR("Failed to set cooperative level, hr %#lx.\n", hr);
 
     if (FAILED(hr = IDirectDraw7_CreateSurface(object->ddraw, &primary_desc, &object->primary, NULL)))
+    {
         ERR("Failed to create primary surface, hr %#lx.\n", hr);
+        IDirectDraw7_Release(object->ddraw);
+        free(object);
+        return hr;
+    }
 
     TRACE("Created VMR7 default presenter %p.\n", object);
     *out = (IUnknown *)&object->IVMRSurfaceAllocator_iface;
