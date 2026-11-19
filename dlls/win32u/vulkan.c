@@ -840,6 +840,7 @@ static VkResult win32u_vkCreateDevice( VkPhysicalDevice client_physical_device, 
                                        const VkAllocationCallbacks *allocator, VkDevice *client_device_ptr )
 {
     VkDeviceCreateInfo *create_info = (VkDeviceCreateInfo *)client_create_info; /* cast away const, chain has been copied in the thunks */
+    VkPhysicalDeviceFeatures features = {0};
     struct vulkan_physical_device *physical_device = vulkan_physical_device_from_handle( client_physical_device );
     struct vulkan_instance *instance = physical_device->instance;
     VkDevice host_device, client_device = *client_device_ptr;
@@ -872,7 +873,6 @@ static VkResult win32u_vkCreateDevice( VkPhysicalDevice client_physical_device, 
     /* Enable shaderStorageImageWriteWithoutFormat for fshack */
     {
         VkPhysicalDeviceFeatures2 *features2;
-        VkPhysicalDeviceFeatures features = {0};
 
         if (create_info->pEnabledFeatures)
         {
