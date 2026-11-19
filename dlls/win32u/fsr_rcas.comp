@@ -1,0 +1,51 @@
+/* The AMD FSR headers are licensed under MIT. See fsr_spv.h and FSR.md. */
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D texSampler;
+layout(binding = 1) uniform writeonly image2D outImage;
+
+layout(push_constant) uniform pushConstants
+{
+    uint sharpness;
+    float saturation;
+    ivec2 extent;
+    ivec4 viewport;
+};
+
+#define A_GPU 1
+#define A_GLSL 1
+#include "ffx_a.h"
+#define FSR_RCAS_F 1
+vec4 FsrRcasLoadF(ivec2 p) { return texelFetch(texSampler, clamp(p, ivec2(0), extent), 0); }
+void FsrRcasInputF(inout float r, inout float g, inout float b) {}
+#include "ffx_fsr1.h"
+
+vec3 adjust_saturation(vec3 color, float saturation)
+{
+    color = clamp(color, 0.0, 1.0);
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    vec3 chroma = color - luma;
+    float high = max(chroma.r, max(chroma.g, chroma.b));
+    float low = min(chroma.r, min(chroma.g, chroma.b));
+
+    /* Limit the chroma gain before any component leaves the SDR range. */
+    if (saturation * high > 1.0 - luma) saturation = (1.0 - luma) / high;
+    if (saturation * low < -luma) saturation = -luma / low;
+    return luma + saturation * chroma;
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, viewport.zw))) return;
+
+    vec3 color = vec3(0.0);
+    if (all(greaterThanEqual(p, viewport.xy)))
+    {
+        FsrRcasF(color.r, color.g, color.b, uvec2(p - viewport.xy), uvec4(sharpness, 0, 0, 0));
+        if (saturation > 1.0) color = adjust_saturation(color, saturation);
+    }
+    imageStore(outImage, p, vec4(color, 1.0));
+}

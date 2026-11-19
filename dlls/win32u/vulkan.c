@@ -163,7 +163,7 @@ struct fs_hack_upscaler
         struct {
             BOOL fp16;
             BOOL lite;
-            float sharpness;
+            float sharpness, saturation;
         } fsr;
         struct {
         } nis;
@@ -2613,7 +2613,7 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
     RECT client_rect;
     VkResult res;
     BOOL lite;
-    float sharpness;
+    float sharpness, saturation;
 
     if (!NtUserIsWindow( surface->hwnd ))
     {
@@ -2665,7 +2665,7 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
             return VK_ERROR_FORMAT_NOT_SUPPORTED;
         }
 
-        swapchain->upscaler.is_fsr = fs_hack_is_fsr(&lite, &sharpness);
+        swapchain->upscaler.is_fsr = fs_hack_is_fsr(&lite, &sharpness, &saturation);
         if (swapchain->upscaler.is_fsr)
         {
             VkFormatProperties properties;
@@ -2681,6 +2681,9 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
         }
         swapchain->upscaler.fsr.lite = lite;
         swapchain->upscaler.fsr.sharpness = sharpness;
+        swapchain->upscaler.fsr.saturation = create_info->imageColorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
+                (create_info->imageFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+                 create_info->imageFormat == VK_FORMAT_B8G8R8A8_SRGB) ? saturation : 1.0f;
         swapchain->host_extents = capabilities.minImageExtent;
         create_info_host.imageExtent = capabilities.minImageExtent;
         create_info_host.imageFormat = swapchain->upscaler.is_fsr ? VK_FORMAT_B8G8R8A8_SRGB: VK_FORMAT_B8G8R8A8_UNORM;
@@ -3115,7 +3118,7 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
     /* 2nd pass (rcas) */
 
     c.fp[0] = exp2f(-swapchain->upscaler.fsr.sharpness);
-    c.uint[1] = 0;
+    c.fp[1] = swapchain->upscaler.fsr.saturation;
     /* RCAS clamps texel coordinates to these inclusive maxima. */
     c.uint[2] = swapchain->host_extents.width - 1;
     c.uint[3] = swapchain->host_extents.height - 1;

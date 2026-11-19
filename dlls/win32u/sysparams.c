@@ -2011,7 +2011,7 @@ static void add_monitor( const struct gdi_monitor *gdi_monitor, void *param )
 /* Cached FSR environment settings. */
 static pthread_once_t fsr_env_once = PTHREAD_ONCE_INIT;
 static BOOL fsr_env_enabled, fsr_env_lite;
-static float fsr_env_sharpness;
+static float fsr_env_sharpness, fsr_env_saturation = 1.0f;
 static BOOL fsr_mode_enabled, fsr_custom_enabled;
 static UINT fsr_mode;
 static SIZE fsr_custom_size;
@@ -2036,6 +2036,15 @@ static void init_fsr_environment(void)
             if (parsed > 10) parsed = 10;
             fsr_env_sharpness = parsed / 10.0f;
         }
+    }
+
+    value = getenv("WINE_FULLSCREEN_FSR_SATURATION");
+    if (value && value[0])
+    {
+        errno = 0;
+        parsed = strtol(value, &end, 10);
+        if (!errno && end != value && !*end)
+            fsr_env_saturation = min(max(parsed, 100), 150) / 100.0f;
     }
 
     value = getenv("WINE_FULLSCREEN_FSR_MODE");
@@ -2073,12 +2082,14 @@ static void init_fsr_environment(void)
 }
 
 /* Return whether the fullscreen FSR mode is enabled. */
-BOOL fs_hack_is_fsr( BOOL *lite, float *sharpness )
+BOOL fs_hack_is_fsr( BOOL *lite, float *sharpness, float *saturation )
 {
     pthread_once(&fsr_env_once, init_fsr_environment);
     if (lite) *lite = fsr_env_lite;
     if (sharpness) *sharpness = fsr_env_sharpness;
-    TRACE("is_fsr %d, lite %d, sharpness %.3f.\n", fsr_env_enabled, fsr_env_lite, fsr_env_sharpness);
+    if (saturation) *saturation = fsr_env_saturation;
+    TRACE("is_fsr %d, lite %d, sharpness %.3f, saturation %.2f.\n",
+            fsr_env_enabled, fsr_env_lite, fsr_env_sharpness, fsr_env_saturation);
     return fsr_env_enabled;
 }
 
@@ -2191,10 +2202,9 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
     SIZE fsr_sizes[4], fsr_limit = {0}, size;
     UINT fsr_mode = 1, i, count;
     const DEVMODEW *mode;
-    BOOL lite, fsr_enabled, single_mode, custom_mode;
-    float sharpness;
+    BOOL fsr_enabled, single_mode, custom_mode;
 
-    fsr_enabled = fs_hack_is_fsr( &lite, &sharpness );
+    fsr_enabled = fs_hack_is_fsr( NULL, NULL, NULL );
     custom_mode = fsr_enabled && get_fsr_custom_mode( &fsr_limit );
     if (custom_mode && (fsr_limit.cx > max_size.cx || fsr_limit.cy > max_size.cy))
         custom_mode = FALSE;
