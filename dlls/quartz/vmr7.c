@@ -247,8 +247,9 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
             for (i = 0; i < ylen && i < data_size; ++i) { ysum += p[i]; if (p[i] < ymin) ymin = p[i]; if (p[i] > ymax) ymax = p[i]; }
             for (i = 0; i < clen && ylen + i < data_size; ++i) { if (p[ylen + i] < umin) umin = p[ylen + i]; if (p[ylen + i] > umax) umax = p[ylen + i]; }
             for (i = 0; i < clen && ylen + clen + i < data_size; ++i) { if (p[ylen + clen + i] < vmin) vmin = p[ylen + clen + i]; if (p[ylen + clen + i] > vmax) vmax = p[ylen + clen + i]; }
-            WARN("diag2: Y[%u..%u] avg %llu U[%u..%u] V[%u..%u] ylen %u clen %u size %u.\n",
-                    ymin, ymax, ylen ? ysum / ylen : 0, umin, umax, vmin, vmax, ylen, clen, data_size);
+            WARN("diag2: Y[%u..%u] U[%u..%u] V[%u..%u] ylen %u clen %u size %u avg %u.\n",
+                    ymin, ymax, umin, umax, vmin, vmax, ylen, clen, data_size,
+                    (unsigned int)(ylen ? ysum / ylen : 0));
         }
         if (!(++diag_count % 120))
             WARN("diag: sample #%u %u bytes, src %ux%u %u bpp comp %#x, dst %lux%lu pitch %lu bpp %lu fourcc %#lx, first %02x%02x%02x%02x.\n",
