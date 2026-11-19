@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #ifdef HAVE_SYS_UN_H
 #include <sys/un.h>
@@ -216,6 +217,8 @@ enum glx_swap_control_method
 static struct glx_pixel_format *pixel_formats;
 static int nb_pixel_formats, nb_onscreen_formats;
 static const struct egl_platform *egl;
+static EGLContext egl_fallback_context;
+static pthread_mutex_t egl_fallback_mutex = PTHREAD_MUTEX_INITIALIZER;
 static BOOL (*p_egl_describe_pixel_format)( int format, struct wgl_pixel_format *pf );
 
 /* Selects the preferred GLX swap control method for use by wglSwapIntervalEXT */
@@ -1507,7 +1510,27 @@ static BOOL x11drv_egl_surface_swap( struct opengl_drawable *base )
 
     TRACE( "%s\n", debugstr_opengl_drawable( base ) );
 
-    funcs->p_eglSwapBuffers( egl->display, gl->base.surface );
+    if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ) && funcs->p_eglGetError() == EGL_BAD_SURFACE
+        && !funcs->p_eglGetCurrentContext())
+    {
+        /* A context cannot be current on multiple threads at once. */
+        pthread_mutex_lock( &egl_fallback_mutex );
+        if (!egl_fallback_context)
+            egl_fallback_context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, NULL );
+
+        if (!egl_fallback_context)
+            WARN( "Failed to create fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        else if (!funcs->p_eglMakeCurrent( egl->display, gl->base.surface, gl->base.surface, egl_fallback_context ))
+            WARN( "Failed to bind fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        else
+        {
+            if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ))
+                WARN( "Failed to swap with fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+            if (!funcs->p_eglMakeCurrent( egl->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT ))
+                WARN( "Failed to unbind fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        }
+        pthread_mutex_unlock( &egl_fallback_mutex );
+    }
 
     if (InterlockedCompareExchange( &base->client->offscreen, 0, 0 ))
         XFlush( gdi_display );
