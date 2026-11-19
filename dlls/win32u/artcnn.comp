@@ -1,0 +1,119 @@
+/* Vulkan wrapper for ArtCNN C4F16; see artcnn_c4f16.glsl for the MIT notice. */
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D src;
+layout(push_constant) uniform PushConstants
+{
+    uvec4 sizes; /* input width, input height, output width, output height */
+};
+
+const vec3 luma_coeff = vec3(0.2126, 0.7152, 0.0722);
+
+#if ARTCNN_STAGE < 7
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D out_image;
+#if ARTCNN_STAGE == 6
+layout(set = 0, binding = 2) uniform sampler2D skip_src;
+#endif
+
+const ivec2 wg_size = ivec2(gl_WorkGroupSize.xy);
+const ivec2 tile_size = wg_size + 2;
+#if ARTCNN_STAGE == 0
+shared float inp[1][tile_size.y][tile_size.x];
+#else
+shared vec4 inp[4][tile_size.y][tile_size.x];
+#endif
+
+ivec2 packed_offset(int group)
+{
+    return ivec2(group & 1, group >> 1);
+}
+
+/* Seven original convolution bodies, including the trained weights. */
+#include "artcnn_weights.glsl"
+
+void main()
+{
+    ivec2 local_xy = ivec2(gl_LocalInvocationID.xy);
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * wg_size;
+    ivec2 input_size = ivec2(sizes.xy);
+    for (int y = local_xy.y; y < tile_size.y; y += wg_size.y)
+    {
+        for (int x = local_xy.x; x < tile_size.x; x += wg_size.x)
+        {
+            /* The trained model uses zero padding in the logical grid. */
+            ivec2 p = base + ivec2(x, y) - 1;
+            bool valid = all(greaterThanEqual(p, ivec2(0))) && all(lessThan(p, input_size));
+#if ARTCNN_STAGE == 0
+            inp[0][y][x] = valid ? dot(texelFetch(src, p, 0).rgb, luma_coeff) : 0.0;
+#else
+            for (int group = 0; group < 4; ++group)
+            {
+                vec4 feature = vec4(0.0);
+                if (valid)
+                {
+                    ivec2 packed_p = p * 2 + packed_offset(group);
+                    feature = texelFetch(src, packed_p, 0);
+#if ARTCNN_STAGE == 6
+                    feature += texelFetch(skip_src, packed_p, 0);
+#endif
+                }
+                inp[group][y][x] = feature;
+            }
+#endif
+        }
+    }
+    barrier();
+
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, input_size))) return;
+    convolve(local_xy, p);
+}
+
+#else
+layout(set = 0, binding = 1) uniform writeonly image2D out_image;
+layout(set = 0, binding = 2) uniform sampler2D rgb_src;
+
+float fetch_luma(ivec2 p, ivec2 extent)
+{
+    p = clamp(p, ivec2(0), extent - 1);
+    /* The channels of the final convolution are TL, TR, BL, BR. Its
+     * logical W x H result can occupy an upper-left subrect of a larger image.
+     */
+    return clamp(texelFetch(src, p / 2, 0)[(p.y & 1) * 2 + (p.x & 1)], 0.0, 1.0);
+}
+
+float sample_luma(vec2 pos, ivec2 extent)
+{
+    ivec2 p = ivec2(floor(pos));
+    vec2 f = fract(pos);
+    return mix(mix(fetch_luma(p, extent), fetch_luma(p + ivec2(1, 0), extent), f.x),
+               mix(fetch_luma(p + ivec2(0, 1), extent), fetch_luma(p + 1, extent), f.x), f.y);
+}
+
+vec4 sample_rgb(vec2 pos, ivec2 extent)
+{
+    ivec2 p = ivec2(floor(pos));
+    ivec2 p0 = clamp(p, ivec2(0), extent - 1);
+    ivec2 p1 = clamp(p + 1, ivec2(0), extent - 1);
+    vec2 f = fract(pos);
+    return mix(mix(texelFetch(rgb_src, p0, 0), texelFetch(rgb_src, ivec2(p1.x, p0.y), 0), f.x),
+               mix(texelFetch(rgb_src, ivec2(p0.x, p1.y), 0), texelFetch(rgb_src, p1, 0), f.x), f.y);
+}
+
+void main()
+{
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(p, sizes.zw))) return;
+
+    /* Pixel-center mapping, identical for chroma and the virtual 2x luma. */
+    ivec2 input_size = ivec2(sizes.xy);
+    vec2 uv = (vec2(p) + 0.5) / vec2(sizes.zw);
+    vec4 base = sample_rgb(uv * vec2(input_size) - 0.5, input_size);
+    ivec2 luma_size = input_size * 2;
+    float luma = sample_luma(uv * vec2(luma_size) - 0.5, luma_size);
+    vec3 rgb = base.rgb + (luma - dot(base.rgb, luma_coeff));
+    imageStore(out_image, ivec2(p), vec4(clamp(rgb, 0.0, 1.0), base.a));
+}
+#endif

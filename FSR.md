@@ -34,7 +34,9 @@ slightly stronger sharpening. Higher input resolution increases rendering cost.
 
 The game must actually select an exposed lower resolution for upscaling to take
 place. Restart Wine when changing environment controls. The Vulkan debug log
-reports whether FSR or lite is enabled for each fullscreen-hack swapchain.
+reports the selected scaler (`FSR`, `FSR lite`, `ArtCNN C4F16`, or `blit`) for
+each fullscreen-hack swapchain. See [ArtCNN](ARTCNN.md) for the optional neural
+scaler.
 
 The intermediate format must support sampled and storage images. If it does
 not, Wine uses ordinary fullscreen scaling. A surface without storage-image

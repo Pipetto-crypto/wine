@@ -2008,9 +2008,9 @@ static void add_monitor( const struct gdi_monitor *gdi_monitor, void *param )
     }
 }
 
-/* Cached FSR environment settings. */
+/* Cached fullscreen upscaler environment settings. */
 static pthread_once_t fsr_env_once = PTHREAD_ONCE_INIT;
-static BOOL fsr_env_enabled, fsr_env_lite;
+static BOOL fsr_env_enabled, fsr_env_lite, artcnn_env_enabled;
 static float fsr_env_sharpness, fsr_env_saturation = 1.0f;
 static BOOL fsr_mode_enabled, fsr_custom_enabled;
 static UINT fsr_mode;
@@ -2025,6 +2025,8 @@ static void init_fsr_environment(void)
 
     fsr_env_enabled = value && value[0] && strcmp(value, "0");
     fsr_env_lite = value && !strcmp(value, "lite");
+    value = getenv("WINE_FULLSCREEN_ARTCNN");
+    artcnn_env_enabled = value && !strcmp(value, "1");
     fsr_env_sharpness = 0.2f;
     if (strength_value && strength_value[0])
     {
@@ -2091,6 +2093,12 @@ BOOL fs_hack_is_fsr( BOOL *lite, float *sharpness, float *saturation )
     TRACE("is_fsr %d, lite %d, sharpness %.3f, saturation %.2f.\n",
             fsr_env_enabled, fsr_env_lite, fsr_env_sharpness, fsr_env_saturation);
     return fsr_env_enabled;
+}
+
+BOOL fs_hack_is_artcnn(void)
+{
+    pthread_once( &fsr_env_once, init_fsr_environment );
+    return artcnn_env_enabled;
 }
 
 static BOOL get_fsr_single_mode( UINT *mode )
@@ -2202,19 +2210,19 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
     SIZE fsr_sizes[4], fsr_limit = {0}, size;
     UINT fsr_mode = 1, i, count;
     const DEVMODEW *mode;
-    BOOL fsr_enabled, single_mode, custom_mode;
+    BOOL artcnn_enabled = fs_hack_is_artcnn(), upscaler_enabled, single_mode, custom_mode;
 
-    fsr_enabled = fs_hack_is_fsr( NULL, NULL, NULL );
-    custom_mode = fsr_enabled && get_fsr_custom_mode( &fsr_limit );
+    upscaler_enabled = artcnn_enabled || fs_hack_is_fsr( NULL, NULL, NULL );
+    custom_mode = upscaler_enabled && get_fsr_custom_mode( &fsr_limit );
     if (custom_mode && (fsr_limit.cx > max_size.cx || fsr_limit.cy > max_size.cy))
         custom_mode = FALSE;
     if (!custom_mode) fsr_limit.cx = fsr_limit.cy = 0;
-    single_mode = fsr_enabled && get_fsr_single_mode( &fsr_mode );
+    single_mode = upscaler_enabled && get_fsr_single_mode( &fsr_mode );
     count = 1 + ARRAY_SIZE(default_sizes) + modes_count + ARRAY_SIZE(fsr_sizes);
     if (!(sizes = malloc( count * sizeof(*sizes) ))) return NULL;
 
     count = add_screen_size( sizes, 0, max_size );
-    if (fsr_enabled)
+    if (upscaler_enabled)
     {
         fsr_sizes[0] = get_fsr_size(max_size, 2.0f);
         fsr_sizes[1] = get_fsr_size(max_size, 1.7f);
@@ -2231,11 +2239,13 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
         count += add_screen_size( sizes, count, default_sizes[i] );
     }
 
-    if (fsr_enabled)
+    if (upscaler_enabled)
     {
         if (custom_mode || single_mode)
         {
-            if (fsr_limit.cx && fsr_limit.cy && fsr_limit.cx > 800 && fsr_limit.cy > 600)
+            /* Allow an explicit low-resolution input for the heavier ArtCNN model. */
+            if (fsr_limit.cx && fsr_limit.cy && ((artcnn_enabled && custom_mode)
+                    || (fsr_limit.cx > 800 && fsr_limit.cy > 600)))
                 count += add_screen_size( sizes, count, fsr_limit );
         }
         else

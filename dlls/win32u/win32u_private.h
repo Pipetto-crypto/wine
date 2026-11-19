@@ -186,6 +186,7 @@ extern MONITORINFO monitor_info_from_window( HWND hwnd, UINT flags );
 extern UINT monitor_dpi_from_rect( RECT rect, UINT dpi, UINT *raw_dpi );
 extern BOOL update_display_cache( BOOL force );
 extern BOOL fs_hack_is_fsr( BOOL *lite, float *sharpness, float *saturation );
+extern BOOL fs_hack_is_artcnn(void);
 extern void reset_monitor_update_serial(void);
 extern void user_lock(void);
 extern void user_unlock(void);
