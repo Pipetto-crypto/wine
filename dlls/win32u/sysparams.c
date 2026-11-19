@@ -26,6 +26,8 @@
 
 #include <pthread.h>
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 
 #include "ntstatus.h"
@@ -2006,6 +2008,126 @@ static void add_monitor( const struct gdi_monitor *gdi_monitor, void *param )
     }
 }
 
+/* Cached FSR environment settings. */
+static pthread_once_t fsr_env_once = PTHREAD_ONCE_INIT;
+static BOOL fsr_env_enabled, fsr_env_lite;
+static float fsr_env_sharpness;
+static BOOL fsr_mode_enabled, fsr_custom_enabled;
+static UINT fsr_mode;
+static SIZE fsr_custom_size;
+
+static void init_fsr_environment(void)
+{
+    const char *value = getenv("WINE_FULLSCREEN_FSR");
+    const char *strength_value = getenv("WINE_FULLSCREEN_FSR_STRENGTH");
+    char *end;
+    long parsed;
+
+    fsr_env_enabled = value && value[0] && strcmp(value, "0");
+    fsr_env_lite = value && !strcmp(value, "lite");
+    fsr_env_sharpness = 0.2f;
+    if (strength_value && strength_value[0])
+    {
+        errno = 0;
+        parsed = strtol(strength_value, &end, 10);
+        if (!errno && end != strength_value && !*end)
+        {
+            if (parsed < 0) parsed = 0;
+            if (parsed > 10) parsed = 10;
+            fsr_env_sharpness = parsed / 10.0f;
+        }
+    }
+
+    value = getenv("WINE_FULLSCREEN_FSR_MODE");
+    if (value && value[0] && strcmp(value, "0"))
+    {
+        fsr_mode_enabled = TRUE;
+        if (!strcmp(value, "Performance") || !strcmp(value, "performance")) fsr_mode = 0;
+        else if (!strcmp(value, "Balanced") || !strcmp(value, "balanced")) fsr_mode = 1;
+        else if (!strcmp(value, "Quality") || !strcmp(value, "quality")) fsr_mode = 2;
+        else if (!strcmp(value, "Ultra") || !strcmp(value, "ultra")) fsr_mode = 3;
+        else fsr_mode = 1;
+    }
+
+    value = getenv("WINE_FULLSCREEN_FSR_CUSTOM_MODE");
+    if (value && value[0])
+    {
+        char *end2;
+        unsigned long width, height;
+
+        errno = 0;
+        width = strtoul(value, &end, 10);
+        if (!errno && end != value && (*end == 'x' || *end == 'X'))
+        {
+            errno = 0;
+            height = strtoul(end + 1, &end2, 10);
+            if (!errno && end2 != end + 1 && !*end2 && width && height
+                    && width <= INT_MAX && height <= INT_MAX)
+            {
+                fsr_custom_size.cx = width;
+                fsr_custom_size.cy = height;
+                fsr_custom_enabled = TRUE;
+            }
+        }
+    }
+}
+
+/* Return whether the fullscreen FSR mode is enabled. */
+BOOL fs_hack_is_fsr( BOOL *lite, float *sharpness )
+{
+    pthread_once(&fsr_env_once, init_fsr_environment);
+    if (lite) *lite = fsr_env_lite;
+    if (sharpness) *sharpness = fsr_env_sharpness;
+    TRACE("is_fsr %d, lite %d, sharpness %.3f.\n", fsr_env_enabled, fsr_env_lite, fsr_env_sharpness);
+    return fsr_env_enabled;
+}
+
+static BOOL get_fsr_single_mode( UINT *mode )
+{
+    pthread_once(&fsr_env_once, init_fsr_environment);
+    if (!fsr_mode_enabled) return FALSE;
+    *mode = fsr_mode;
+    TRACE("found FSR single mode %u.\n", *mode);
+    return TRUE;
+}
+
+static BOOL get_fsr_custom_mode( SIZE *size )
+{
+    pthread_once(&fsr_env_once, init_fsr_environment);
+    if (!fsr_custom_enabled) return FALSE;
+    *size = fsr_custom_size;
+    TRACE("found FSR custom size %dx%d.\n", size->cx, size->cy);
+    return TRUE;
+}
+
+static float get_fsr_h_ratio( SIZE size )
+{
+    UINT64 width = size.cx > 0 ? size.cx : 0, height = size.cy > 0 ? size.cy : 0;
+
+    if (!width || !height) return 1.0f;
+    if (width * 9 == height * 16 || width / 210 == height / 90 || width * 9 == height * 32) return 9.0f;
+    if (width * 5 == height * 8 || width * 5 == height * 12) return 10.0f;
+    return 1.0f;
+}
+
+static SIZE get_fsr_size( SIZE devmode, float factor )
+{
+    float h_ratio, real_w_ratio;
+    SIZE fsr_size = {0};
+    LONG height;
+
+    if (devmode.cx <= 0 || devmode.cy <= 0 || factor <= 1.0f) return fsr_size;
+    h_ratio = get_fsr_h_ratio(devmode);
+    real_w_ratio = devmode.cx / (devmode.cy / h_ratio);
+    height = (LONG)(devmode.cy / h_ratio / factor + 0.5f);
+    if (height <= 0) return fsr_size;
+    fsr_size.cy = (LONG)(height * h_ratio + 0.5f);
+    fsr_size.cx = (LONG)(real_w_ratio * height + 0.5f);
+    if (fsr_size.cx <= 0 || fsr_size.cy <= 0) fsr_size.cx = fsr_size.cy = 0;
+    TRACE("calculated FSR size %dx%d, ratio %.2f.\n", fsr_size.cx, fsr_size.cy, factor);
+    return fsr_size;
+}
+
 static UINT add_screen_size( SIZE *sizes, UINT count, SIZE size )
 {
     UINT i = 0;
@@ -2046,6 +2168,7 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
         {2880, 1620},
         {3200, 1800},
         /* 16:10 */
+        {1280,  800},
         {1440,  900},
         {1680, 1050},
         {1920, 1200},
@@ -2065,25 +2188,65 @@ static SIZE *get_screen_sizes( const DEVMODEW *maximum, const DEVMODEW *modes, U
     };
     UINT max_width = devmode_get( maximum, DM_PELSWIDTH ), max_height = devmode_get( maximum, DM_PELSHEIGHT );
     SIZE *sizes, max_size = {.cx = max( max_width, max_height ), .cy = min( max_width, max_height )};
+    SIZE fsr_sizes[4], fsr_limit = {0}, size;
+    UINT fsr_mode = 1, i, count;
     const DEVMODEW *mode;
-    UINT i, count;
+    BOOL lite, fsr_enabled, single_mode, custom_mode;
+    float sharpness;
 
-    count = 1 + ARRAY_SIZE(default_sizes) + modes_count;
+    fsr_enabled = fs_hack_is_fsr( &lite, &sharpness );
+    custom_mode = fsr_enabled && get_fsr_custom_mode( &fsr_limit );
+    if (custom_mode && (fsr_limit.cx > max_size.cx || fsr_limit.cy > max_size.cy))
+        custom_mode = FALSE;
+    if (!custom_mode) fsr_limit.cx = fsr_limit.cy = 0;
+    single_mode = fsr_enabled && get_fsr_single_mode( &fsr_mode );
+    count = 1 + ARRAY_SIZE(default_sizes) + modes_count + ARRAY_SIZE(fsr_sizes);
     if (!(sizes = malloc( count * sizeof(*sizes) ))) return NULL;
 
     count = add_screen_size( sizes, 0, max_size );
+    if (fsr_enabled)
+    {
+        fsr_sizes[0] = get_fsr_size(max_size, 2.0f);
+        fsr_sizes[1] = get_fsr_size(max_size, 1.7f);
+        fsr_sizes[2] = get_fsr_size(max_size, 1.5f);
+        fsr_sizes[3] = get_fsr_size(max_size, 1.3f);
+        if (!custom_mode && single_mode && fsr_mode < ARRAY_SIZE(fsr_sizes)) fsr_limit = fsr_sizes[fsr_mode];
+    }
+
     for (i = 0; i < ARRAY_SIZE(default_sizes); i++)
     {
         if (default_sizes[i].cx > max_size.cx || default_sizes[i].cy > max_size.cy) continue;
+        if (fsr_limit.cx && default_sizes[i].cx > fsr_limit.cx) continue;
+        if (fsr_limit.cy && default_sizes[i].cy > fsr_limit.cy) continue;
         count += add_screen_size( sizes, count, default_sizes[i] );
+    }
+
+    if (fsr_enabled)
+    {
+        if (custom_mode || single_mode)
+        {
+            if (fsr_limit.cx && fsr_limit.cy && fsr_limit.cx > 800 && fsr_limit.cy > 600)
+                count += add_screen_size( sizes, count, fsr_limit );
+        }
+        else
+        {
+            for (i = 0; i < ARRAY_SIZE(fsr_sizes); i++)
+            {
+                size = fsr_sizes[i];
+                if (!size.cx || !size.cy || size.cx < 800 || size.cy < 600) continue;
+                count += add_screen_size( sizes, count, size );
+            }
+        }
     }
 
     for (mode = modes; mode && modes_count; mode = NEXT_DEVMODEW(mode), modes_count--)
     {
         UINT width = devmode_get( mode, DM_PELSWIDTH ), height = devmode_get( mode, DM_PELSHEIGHT );
-        SIZE size = {.cx = max( width, height ), .cy = min( width, height )};
-        if (!size.cx || size.cx > max_size.cx) continue;
-        if (!size.cy || size.cy > max_size.cy) continue;
+        size.cx = max( width, height );
+        size.cy = min( width, height );
+        if (!size.cx || size.cx > max_size.cx || !size.cy || size.cy > max_size.cy) continue;
+        if (fsr_limit.cx && size.cx > fsr_limit.cx) continue;
+        if (fsr_limit.cy && size.cy > fsr_limit.cy) continue;
         count += add_screen_size( sizes, count, size );
     }
 
