@@ -430,7 +430,7 @@ jobs:
           # This does not run the test suites; make test/check is deliberately separate.
           make -j"$(nproc)"
           for arch in i386 x86_64; do
-            for module in kernel32 mf mfplat ntdll; do
+            for module in kernel32 mf mfplat ntdll quartz; do
               test -s "dlls/${module}/tests/${arch}-windows/${module}_test.exe"
             done
           done
@@ -446,6 +446,7 @@ jobs:
             build-wow64/dlls/mf/tests/*-windows/mf_test.exe
             build-wow64/dlls/mfplat/tests/*-windows/mfplat_test.exe
             build-wow64/dlls/ntdll/tests/*-windows/ntdll_test.exe
+            build-wow64/dlls/quartz/tests/*-windows/quartz_test.exe
 
       # --------------------------------------------------------
       # 安装 & 打包

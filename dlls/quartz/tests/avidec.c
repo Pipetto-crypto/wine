@@ -1968,6 +1968,44 @@ static void test_source_media_types(IPin *source, AM_MEDIA_TYPE *source_mt, BOOL
     winetest_pop_context();
 }
 
+static void test_top_down_rects(IPin *source)
+{
+    VIDEOINFOHEADER format =
+    {
+        .bmiHeader.biSize = sizeof(BITMAPINFOHEADER),
+        .bmiHeader.biWidth = 29,
+        .bmiHeader.biHeight = -24,
+        .bmiHeader.biPlanes = 1,
+        .bmiHeader.biBitCount = 24,
+        .bmiHeader.biCompression = BI_RGB,
+        .bmiHeader.biSizeImage = 88 * 24,
+    };
+    AM_MEDIA_TYPE mt =
+    {
+        .majortype = MEDIATYPE_Video,
+        .subtype = MEDIASUBTYPE_RGB24,
+        .bFixedSizeSamples = TRUE,
+        .lSampleSize = format.bmiHeader.biSizeImage,
+        .formattype = FORMAT_VideoInfo,
+        .cbFormat = sizeof(format),
+        .pbFormat = (BYTE *)&format,
+    };
+    BOOL use_rgb24 = _use_rgb24;
+    HRESULT hr;
+
+    /* A full-frame rectangle still uses ICM_DECOMPRESS_QUERY for top-down RGB. */
+    _use_rgb24 = TRUE;
+    SetRect(&format.rcSource, 0, 0, 29, 24);
+    hr = IPin_QueryAccept(source, &mt);
+    ok(hr == S_OK, "Got hr %#lx for a full source rectangle.\n", hr);
+
+    SetRectEmpty(&format.rcSource);
+    SetRect(&format.rcTarget, 0, 0, 29, 24);
+    hr = IPin_QueryAccept(source, &mt);
+    ok(hr == S_OK, "Got hr %#lx for a full target rectangle.\n", hr);
+    _use_rgb24 = use_rgb24;
+}
+
 static void test_connect_pin(void)
 {
     VIDEOINFOHEADER req_format =
@@ -2059,6 +2097,7 @@ static void test_connect_pin(void)
 
     test_source_media_types(source, &source_mt, FALSE);
     test_source_media_types(source, NULL, TRUE);
+    test_top_down_rects(source);
 
     test_sink_allocator(meminput);
 
