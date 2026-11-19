@@ -452,34 +452,33 @@ static HRESULT WINAPI transform_SetInputType(IMFTransform *iface, DWORD id, IMFM
         return hr;
 
     if (FAILED(hr = IMFMediaType_CopyAllItems(type, (IMFAttributes *)impl->input_type)))
-    {
-        IMFMediaType_Release(impl->input_type);
-        impl->input_type = NULL;
-    }
+        goto failed;
     if (FAILED(IMFMediaType_GetUINT32(impl->input_type, &MF_MT_DEFAULT_STRIDE, &stride)))
     {
         if (FAILED(hr = MFGetStrideForBitmapInfoHeader(subtype.Data1, frame_size >> 32, (LONG *)&stride)))
-        {
-            IMFMediaType_Release(impl->input_type);
-            impl->input_type = NULL;
-        }
+            goto failed;
         if (FAILED(hr = IMFMediaType_SetUINT32(impl->input_type, &MF_MT_DEFAULT_STRIDE, abs((INT32)stride))))
-        {
-            IMFMediaType_Release(impl->input_type);
-            impl->input_type = NULL;
-        }
+            goto failed;
     }
 
     if (impl->output_type && FAILED(hr = try_create_wg_transform(impl)))
-    {
-        IMFMediaType_Release(impl->input_type);
-        impl->input_type = NULL;
-    }
+        goto failed;
 
     if (FAILED(hr) || FAILED(MFCalculateImageSize(&subtype, frame_size >> 32, (UINT32)frame_size,
             (UINT32 *)&impl->input_info.cbSize)))
         impl->input_info.cbSize = 0;
 
+    return hr;
+
+failed:
+    if (impl->wg_transform)
+    {
+        wg_transform_destroy(impl->wg_transform);
+        impl->wg_transform = 0;
+    }
+    IMFMediaType_Release(impl->input_type);
+    impl->input_type = NULL;
+    impl->input_info.cbSize = 0;
     return hr;
 }
 
@@ -530,34 +529,33 @@ static HRESULT WINAPI transform_SetOutputType(IMFTransform *iface, DWORD id, IMF
         return hr;
 
     if (FAILED(hr = IMFMediaType_CopyAllItems(type, (IMFAttributes *)impl->output_type)))
-    {
-        IMFMediaType_Release(impl->output_type);
-        impl->output_type = NULL;
-    }
+        goto failed;
     if (FAILED(IMFMediaType_GetUINT32(impl->output_type, &MF_MT_DEFAULT_STRIDE, &stride)))
     {
         if (FAILED(hr = MFGetStrideForBitmapInfoHeader(subtype.Data1, frame_size >> 32, (LONG *)&stride)))
-        {
-            IMFMediaType_Release(impl->output_type);
-            impl->output_type = NULL;
-        }
+            goto failed;
         if (FAILED(hr = IMFMediaType_SetUINT32(impl->output_type, &MF_MT_DEFAULT_STRIDE, abs((INT32)stride))))
-        {
-            IMFMediaType_Release(impl->output_type);
-            impl->output_type = NULL;
-        }
+            goto failed;
     }
 
     if (impl->input_type && FAILED(hr = try_create_wg_transform(impl)))
-    {
-        IMFMediaType_Release(impl->output_type);
-        impl->output_type = NULL;
-    }
+        goto failed;
 
     if (FAILED(hr) || FAILED(MFCalculateImageSize(&subtype, frame_size >> 32, (UINT32)frame_size,
             (UINT32 *)&impl->output_info.cbSize)))
         impl->output_info.cbSize = 0;
 
+    return hr;
+
+failed:
+    if (impl->wg_transform)
+    {
+        wg_transform_destroy(impl->wg_transform);
+        impl->wg_transform = 0;
+    }
+    IMFMediaType_Release(impl->output_type);
+    impl->output_type = NULL;
+    impl->output_info.cbSize = 0;
     return hr;
 }
 
