@@ -157,6 +157,13 @@ HRESULT d3d_video_decoder_create(struct d3d_device *device, const D3D11_VIDEO_DE
     struct d3d_video_decoder *object;
     HRESULT hr;
 
+    if (!decoder)
+        return E_INVALIDARG;
+
+    *decoder = NULL;
+    if (!desc || !config)
+        return E_INVALIDARG;
+
     TRACE("profile %s, size %ux%u, output format %#x.\n",
             debugstr_guid(&desc->Guid), desc->SampleWidth, desc->SampleHeight, desc->OutputFormat);
 

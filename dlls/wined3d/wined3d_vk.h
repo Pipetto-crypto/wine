@@ -474,6 +474,12 @@ enum wined3d_retired_object_type_vk
     WINED3D_RETIRED_AUX_COMMAND_BUFFER_VK,
 };
 
+struct wined3d_video_session_memory_vk
+{
+    struct wined3d_allocator_block *memory_block;
+    VkDeviceMemory vk_memory;
+};
+
 struct wined3d_retired_object_vk
 {
     enum wined3d_retired_object_type_vk type;
@@ -499,8 +505,8 @@ struct wined3d_retired_object_vk
         struct
         {
             VkVideoSessionKHR vk_session;
-            struct wined3d_allocator_block *memory_block;
-            VkDeviceMemory vk_memory;
+            struct wined3d_video_session_memory_vk *memory;
+            uint32_t memory_count;
         } video_session_memory;
         VkVideoSessionParametersKHR vk_video_parameters;
         struct
@@ -779,8 +785,8 @@ void wined3d_context_vk_destroy_vk_pipeline(struct wined3d_context_vk *context_v
 void wined3d_context_vk_destroy_vk_video_parameters(struct wined3d_context_vk *context_vk,
         VkVideoSessionParametersKHR vk_video_parameters, uint64_t command_buffer_id);
 void wined3d_context_vk_destroy_vk_video_session_memory(struct wined3d_context_vk *context_vk,
-        VkVideoSessionKHR vk_video_session, struct wined3d_allocator_block *memory_block,
-        VkDeviceMemory vk_memory, uint64_t command_buffer_id);
+        VkVideoSessionKHR vk_video_session, struct wined3d_video_session_memory_vk *memory,
+        uint32_t memory_count, uint64_t command_buffer_id);
 void wined3d_context_vk_end_current_render_pass(struct wined3d_context_vk *context_vk);
 void wined3d_context_vk_free_memory(struct wined3d_context_vk *context_vk, struct wined3d_allocator_block *block);
 VkCommandBuffer wined3d_context_vk_get_command_buffer(struct wined3d_context_vk *context_vk);

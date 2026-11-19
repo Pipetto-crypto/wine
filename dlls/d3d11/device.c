@@ -7750,7 +7750,14 @@ static HRESULT STDMETHODCALLTYPE d3d11_video_device_CreateVideoDecoder(ID3D11Vid
     struct d3d_video_decoder *object;
     HRESULT hr;
 
-    FIXME("iface %p, desc %p, config %p, decoder %p, stub!\n", iface, desc, config, decoder);
+    TRACE("iface %p, desc %p, config %p, decoder %p.\n", iface, desc, config, decoder);
+
+    if (!decoder)
+        return E_INVALIDARG;
+
+    *decoder = NULL;
+    if (!desc || !config)
+        return E_INVALIDARG;
 
     if (FAILED(hr = d3d_video_decoder_create(device, desc, config, &object)))
         return hr;

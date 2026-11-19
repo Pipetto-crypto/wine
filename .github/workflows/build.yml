@@ -195,7 +195,7 @@ jobs:
             lld"
 
           # Required headers must be installed before configure; never hide a timeout.
-          sudo timeout 1800 apt -o Acquire::Retries=3 install -y --no-install-recommends $BASE_DEPS
+          sudo timeout 3600 apt -o Acquire::Retries=3 install -y --no-install-recommends $BASE_DEPS
 
       # --------------------------------------------------------
       # 多媒体 / 音频依赖

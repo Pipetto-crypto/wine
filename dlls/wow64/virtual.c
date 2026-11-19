@@ -66,8 +66,11 @@ static BOOL WINAPIV send_cross_process_notification( HANDLE process, UINT id, co
 static MEMORY_RANGE_ENTRY *memory_range_entry_array_32to64( const MEMORY_RANGE_ENTRY32 *addresses32,
                                                             ULONG count )
 {
-    MEMORY_RANGE_ENTRY *addresses = Wow64AllocateTemp( sizeof(MEMORY_RANGE_ENTRY) * count );
+    MEMORY_RANGE_ENTRY *addresses;
     ULONG i;
+
+    if (count > ~(SIZE_T)0 / sizeof(*addresses)) return NULL;
+    if (!(addresses = Wow64AllocateTemp( sizeof(*addresses) * count ))) return NULL;
 
     for (i = 0; i < count; i++)
     {
@@ -88,8 +91,11 @@ static NTSTATUS mem_extended_parameters_32to64( MEM_EXTENDED_PARAMETER **ret_par
     MEM_ADDRESS_REQUIREMENTS32 *req32 = NULL;
 
     if (*count && !params32) return STATUS_INVALID_PARAMETER;
+    if ((SIZE_T)*count > (~(SIZE_T)0 - sizeof(*req)) / sizeof(*params) - 1)
+        return STATUS_INVALID_PARAMETER;
 
-    params = Wow64AllocateTemp( (*count + 1) * sizeof(*params) + sizeof(*req) );
+    if (!(params = Wow64AllocateTemp( ((SIZE_T)*count + 1) * sizeof(*params) + sizeof(*req) )))
+        return STATUS_NO_MEMORY;
     req = (MEM_ADDRESS_REQUIREMENTS *)(params + *count + 1);
 
     for (i = 0; i < *count; i++)
@@ -757,7 +763,8 @@ NTSTATUS WINAPI wow64_NtSetInformationVirtualMemory( UINT *args )
     MEMORY_RANGE_ENTRY *addresses;
 
     if (!count) return STATUS_INVALID_PARAMETER_3;
-    addresses = memory_range_entry_array_32to64( addresses32, count );
+    if (!addresses32) return STATUS_ACCESS_VIOLATION;
+    if (!(addresses = memory_range_entry_array_32to64( addresses32, count ))) return STATUS_NO_MEMORY;
 
     switch (info_class)
     {

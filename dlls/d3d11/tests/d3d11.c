@@ -36962,6 +36962,19 @@ static void test_h264_decoder(void)
     desc.SampleHeight = 240;
     desc.OutputFormat = DXGI_FORMAT_NV12;
 
+    decoder = (ID3D11VideoDecoder *)(UINT_PTR)0xdeadbeef;
+    hr = ID3D11VideoDevice_CreateVideoDecoder(video_device, NULL, &config, &decoder);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    ok(!decoder, "Got decoder %p.\n", decoder);
+
+    decoder = (ID3D11VideoDecoder *)(UINT_PTR)0xdeadbeef;
+    hr = ID3D11VideoDevice_CreateVideoDecoder(video_device, &desc, NULL, &decoder);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    ok(!decoder, "Got decoder %p.\n", decoder);
+
+    hr = ID3D11VideoDevice_CreateVideoDecoder(video_device, &desc, &config, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+
     hr = ID3D11VideoDevice_GetVideoDecoderConfigCount(video_device, &desc, &count);
     todo_wine ok(hr == S_OK, "Got hr %#lx.\n", hr);
     if (hr == S_OK)
@@ -36972,7 +36985,7 @@ static void test_h264_decoder(void)
     for (unsigned int i = 0; i < count; ++i)
     {
         memset(&config, 0xcc, sizeof(config));
-        hr = ID3D11VideoDevice_GetVideoDecoderConfig(video_device, &desc, 0, &config);
+        hr = ID3D11VideoDevice_GetVideoDecoderConfig(video_device, &desc, i, &config);
         ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
         ok(IsEqualGUID(&config.guidConfigBitstreamEncryption, &DXVA_NoEncrypt),
