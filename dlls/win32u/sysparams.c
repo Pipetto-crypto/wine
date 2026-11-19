@@ -5343,10 +5343,11 @@ static void get_text_metr_size( HDC hdc, LOGFONTW *lf, TEXTMETRICW *metric, UINT
     TEXTMETRICW tm;
     UINT ret;
     if (!metric) metric = &tm;
+    metric->tmHeight = -1;
+    metric->tmExternalLeading = 0;
     hfont = NtGdiHfontCreate( lf, sizeof(*lf), 0, 0, NULL );
     if (!hfont || !(hfontsav = NtGdiSelectFont( hdc, hfont )))
     {
-        metric->tmHeight = -1;
         if (psz) *psz = 10;
         if (hfont) NtGdiDeleteObjectApp( hfont );
         return;
