@@ -406,7 +406,8 @@ jobs:
             --enable-nls \
             --disable-winemenubuilder \
             --disable-win16 \
-            --disable-tests \
+            --enable-tests \
+            --disable-winetest \
             --without-wayland \
             --without-capi \
             --without-oss \
@@ -424,7 +425,25 @@ jobs:
             ${WINE_GSTREAMER_ARG} \
             ${WINE_FFMPEG_ARG}
 
+          # Build test executables as well, so regressions cannot silently stop compiling.
+          # This does not run the test suites; make test/check is deliberately separate.
           make -j"$(nproc)"
+          for arch in i386 x86_64; do
+            for module in mf mfplat ntdll; do
+              test -s "dlls/${module}/tests/${arch}-windows/${module}_test.exe"
+            done
+          done
+
+      - name: Upload media and WOW64 regression executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wine-regression-tests-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            build-wow64/dlls/mf/tests/*-windows/mf_test.exe
+            build-wow64/dlls/mfplat/tests/*-windows/mfplat_test.exe
+            build-wow64/dlls/ntdll/tests/*-windows/ntdll_test.exe
 
       # --------------------------------------------------------
       # 安装 & 打包
