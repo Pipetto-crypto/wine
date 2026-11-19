@@ -173,6 +173,7 @@ jobs:
             libasound2-dev \
             libswscale-dev \
             libswresample-dev \
+            libdav1d7 \
             libpulse-dev \
             libudev-dev \
             libcups2-dev \
