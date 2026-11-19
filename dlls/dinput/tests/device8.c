@@ -123,7 +123,7 @@ static HRESULT create_dinput_device( DWORD version, const GUID *guid, IDirectInp
     ref = IDirectInput_Release( dinput );
     ok( ref == 0, "Release returned %ld\n", ref );
 
-    return DI_OK;
+    return hr;
 }
 
 static HKL activate_keyboard_layout( LANGID langid, HKL *old_hkl )
