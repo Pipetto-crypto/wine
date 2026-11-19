@@ -30,8 +30,8 @@
 #include "wine/strmbase.h"
 #include "wine/test.h"
 
-#include "initguid.h"
 #include "dmoreg.h"
+#include "initguid.h"
 #include "wmsdk.h"
 #include "wmcodecdsp.h"
 
