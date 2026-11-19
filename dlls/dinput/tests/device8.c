@@ -1180,6 +1180,7 @@ static void test_sys_mouse( DWORD version )
     DIDEVCAPS caps = {0};
     DIMOUSESTATE state;
     ULONG res, ref;
+    LONG wheel_pos;
     HANDLE event;
     DWORD count;
     HRESULT hr;
@@ -1600,6 +1601,116 @@ static void test_sys_mouse( DWORD version )
         hr = IDirectInputDevice8_Unacquire( device );
         ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
     }
+
+    /* Wheel mouse in relative mode */
+    hr = IDirectInputDevice8_Acquire( device );
+    ok( hr == DI_OK, "Acquire returned %#lx, skipping test_sys_mouse\n", hr );
+    if (hr != DI_OK) goto cleanup;
+
+    mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+    res = WaitForSingleObject( event, 100 );
+    if (res == WAIT_TIMEOUT) /* Acquire is asynchronous */
+    {
+        mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+        res = WaitForSingleObject( event, 5000 );
+    }
+    ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+    count = INFINITE;
+    hr = IDirectInputDevice8_GetDeviceData( device, sizeof(objdata), NULL, &count, 0 );
+    ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+
+    res = ResetEvent( event );
+    ok( res, "ResetEvent failed, error %lu\n", GetLastError() );
+
+    for (i = -3; i < 3; i++)
+    {
+        int j;
+        int obj_size = version < 0x800 ? sizeof(DIDEVICEOBJECTDATA_DX3) : sizeof(objdata);
+        int delta = i >= 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+
+        mouse_event( MOUSEEVENTF_WHEEL, 0, 0, delta, 0 );
+        res = WaitForSingleObject( event, 100 );
+        todo_wine_if( version < 0x800 && res)
+        ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+        for (j = 0; j < 100; j++)
+        {
+            count = 1;
+            hr = IDirectInputDevice8_GetDeviceData( device, obj_size, &objdata, &count, 0 );
+            ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+            ok( count == 1, "got count %lu\n", count );
+            if (hr == DI_OK && count == 1 && objdata.dwOfs == DIMOFS_Z) break;
+        }
+
+        ok( hr == DI_OK, "GetDeviceData returned %#lx\n", hr );
+        ok( count == 1, "got count %lu\n", count );
+        ok( objdata.dwOfs == DIMOFS_Z, "got objdata.dwOfs = %lu\n", objdata.dwOfs);
+        ok( objdata.dwData == delta, "got objdata.dwData = %lu\n", objdata.dwData);
+    }
+
+    hr = IDirectInputDevice8_Unacquire( device );
+    ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
+
+    /* Wheel mouse in absolute mode */
+    prop_dword.dwData = DIPROPAXISMODE_ABS;
+    hr = IDirectInputDevice8_SetProperty(device, DIPROP_AXISMODE, &prop_dword.diph);
+    ok( hr == DI_OK, "SetProperty returned %#lx\n", hr );
+
+    hr = IDirectInputDevice8_Acquire( device );
+    ok( hr == DI_OK, "Acquire returned %#lx, skipping test_sys_mouse\n", hr );
+    if (hr != DI_OK) goto cleanup;
+
+    mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+    res = WaitForSingleObject( event, 100 );
+    if (res == WAIT_TIMEOUT) /* Acquire is asynchronous */
+    {
+        mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+        res = WaitForSingleObject( event, 5000 );
+    }
+    ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+    hr = IDirectInputDevice8_GetDeviceState(device, sizeof(state), &state);
+    ok( hr == DI_OK, "GetDeviceState  returned %#lx\n", hr );
+    wheel_pos = state.lZ;
+
+    count = INFINITE;
+    hr = IDirectInputDevice8_GetDeviceData( device, sizeof(objdata), NULL, &count, 0 );
+    ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+
+    res = ResetEvent( event );
+    ok( res, "ResetEvent failed, error %lu\n", GetLastError() );
+
+    for (i = -3; i < 3; i++)
+    {
+        int j;
+        int obj_size = version < 0x800 ? sizeof(DIDEVICEOBJECTDATA_DX3) : sizeof(objdata);
+        int delta = i >= 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+        wheel_pos += delta;
+
+        mouse_event( MOUSEEVENTF_WHEEL, 0, 0, delta, 0 );
+        res = WaitForSingleObject( event, 100 );
+        todo_wine_if( version < 0x800 && res)
+        ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+        for (j = 0; j < 100; j++)
+        {
+            count = 1;
+            hr = IDirectInputDevice8_GetDeviceData( device, obj_size, &objdata, &count, 0 );
+            ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+            ok( count == 1, "got count %lu\n", count );
+            if (hr == DI_OK && count == 1 && objdata.dwOfs == DIMOFS_Z) break;
+        }
+
+        ok( hr == DI_OK, "GetDeviceData returned %#lx\n", hr );
+        ok( count == 1, "got count %lu\n", count );
+        ok( objdata.dwOfs == DIMOFS_Z, "got objdata.dwOfs = %lu\n", objdata.dwOfs);
+        ok( objdata.dwData == wheel_pos, "got objdata.dwData = %lu, wheel_pos = %ld\n", objdata.dwData, wheel_pos);
+    }
+
+    hr = IDirectInputDevice8_Unacquire( device );
+    ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
+
 
     tmp_hwnd = create_foreground_window( FALSE );
 
