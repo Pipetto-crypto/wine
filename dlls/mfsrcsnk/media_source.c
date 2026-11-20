@@ -454,6 +454,12 @@ static HRESULT media_source_start(struct media_source *source, IMFPresentationDe
     if (source->state == SOURCE_SHUTDOWN)
         return MF_E_SHUTDOWN;
 
+    if (FAILED(hr = IMFPresentationDescriptor_GetStreamDescriptorCount(descriptor, &count)))
+    {
+        WARN("Failed to get presentation descriptor stream count, hr %#lx\n", hr);
+        return hr;
+    }
+
     if (source->state == SOURCE_STOPPED && position->vt == VT_EMPTY)
     {
         position->vt = VT_I8;
@@ -467,9 +473,6 @@ static HRESULT media_source_start(struct media_source *source, IMFPresentationDe
             stream->eos = FALSE;
         stream->active = FALSE;
     }
-
-    if (FAILED(hr = IMFPresentationDescriptor_GetStreamDescriptorCount(descriptor, &count)))
-        WARN("Failed to get presentation descriptor stream count, hr %#lx\n", hr);
 
     for (i = 0; i < count; i++)
     {
