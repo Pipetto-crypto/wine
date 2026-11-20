@@ -22,6 +22,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(dmloader);
 
 static const WCHAR *system_default_gm_paths[] =
 {
+    L"/data/data/com.termux/files/usr/glibc/share/sounds/sf2/default-GM.sf2",
+    L"/data/data/com.termux/files/usr/glibc/share/soundfonts/default.sf2",
     L"/usr/share/sounds/sf2/default-GM.sf2",
     L"/usr/share/soundfonts/default.sf2",
 };

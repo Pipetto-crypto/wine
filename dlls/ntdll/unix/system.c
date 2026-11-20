@@ -23,6 +23,7 @@
 #endif
 
 #include "config.h"
+#include "wine/tgmux_paths.h"
 
 #include <fcntl.h>
 #include <string.h>
@@ -2530,7 +2531,7 @@ static GUID *get_system_uuid( GUID *uuid )
     int fd;
 
     memset( uuid, 0xff, sizeof(*uuid) );
-    if ((fd = open( "/var/lib/dbus/machine-id", O_RDONLY )) != -1)
+    if ((fd = open( tgmux_machine_id(), O_RDONLY )) != -1)
     {
         unsigned char buf[32], *p = buf;
         if (read( fd, buf, sizeof(buf) ) == sizeof(buf))

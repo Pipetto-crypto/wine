@@ -17,10 +17,18 @@
  */
 
 #include "gst_private.h"
+#include <stdlib.h>
 #include "initguid.h"
 #include "wmsdk.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wmvcore);
+
+static bool wm_reader_use_opengl(bool enabled)
+{
+    const char *env = getenv("WINE_GST_USE_OPENGL");
+
+    return env ? atoi(env) > 0 : enabled;
+}
 
 struct wm_stream
 {
@@ -1096,7 +1104,7 @@ static HRESULT WINAPI header_info_GetAttributeByName(IWMHeaderInfo3 *iface, WORD
     {
         if (*stream_number)
         {
-            WARN("Requesting duration for stream %u, returning ASF_E_NOTFOUND.\n", *stream_number);
+            WARN("Requesting seekable attribute for stream %u, returning ASF_E_NOTFOUND.\n", *stream_number);
             return ASF_E_NOTFOUND;
         }
 
@@ -1306,7 +1314,7 @@ static HRESULT WINAPI header_info_AddCodecInfo(IWMHeaderInfo3 *iface, const WCHA
         const WCHAR *desc, WMT_CODEC_INFO_TYPE type, WORD size, BYTE *info)
 {
     FIXME("iface %p, name %s, desc %s, type %#x, size %u, info %p, stub!\n",
-            info, debugstr_w(name), debugstr_w(desc), type, size, info);
+            iface, debugstr_w(name), debugstr_w(desc), type, size, info);
     return E_NOTIMPL;
 }
 
@@ -1638,7 +1646,8 @@ static HRESULT init_stream(struct wm_reader *reader)
     /* 32-bit GStreamer ORC cannot efficiently convert I420 to RGBA, use OpenGL converter
      * in that case but keep the usual codepath otherwise.
      */
-    if (!(wg_parser = wg_parser_create(FALSE, enable_opengl)))
+    if (!(wg_parser = wg_parser_create(wm_reader_use_opengl(enable_opengl)
+            ? WG_PARSER_CREATE_FLAG_USE_OPENGL : WG_PARSER_CREATE_FLAG_NONE)))
         return E_OUTOFMEMORY;
 
     reader->wg_parser = wg_parser;
@@ -1798,7 +1807,8 @@ static HRESULT reinit_stream(struct wm_reader *reader, bool read_compressed)
     wg_parser_destroy(reader->wg_parser);
     reader->wg_parser = 0;
 
-    if (!(wg_parser = wg_parser_create(read_compressed, enable_opengl)))
+    if (!(wg_parser = wg_parser_create((read_compressed ? WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED : 0)
+            | (wm_reader_use_opengl(enable_opengl) ? WG_PARSER_CREATE_FLAG_USE_OPENGL : 0))))
         return E_OUTOFMEMORY;
 
     reader->wg_parser = wg_parser;
@@ -2943,7 +2953,6 @@ static HRESULT WINAPI reader_GetAllocateForOutput(IWMSyncReader2 *iface, DWORD o
         return E_INVALIDARG;
     }
 
-    stream = reader->streams + output;
     if ((*allocator = stream->output_allocator))
         IWMReaderAllocatorEx_AddRef(*allocator);
 

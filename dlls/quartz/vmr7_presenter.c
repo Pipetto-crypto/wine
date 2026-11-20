@@ -36,6 +36,8 @@ struct vmr7_presenter
     IDirectDraw7 *ddraw;
     IDirectDrawSurface7 *frontbuffer;
     IDirectDrawSurface7 *primary;
+    BOOL logged_empty_rect;
+    BOOL logged_invalid_rect;
     HWND window;
 
     SIZE native_size, aspect_ratio;
@@ -111,9 +113,17 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
         DWORD_PTR cookie, VMRPRESENTATIONINFO *info)
 {
     struct vmr7_presenter *presenter = impl_from_IVMRImagePresenter(iface);
-    POINT point;
+    HWND window = presenter->window;
+    static volatile LONG frame_count;
+    LONG current_frame;
+    BOOL test_pattern;
+    POINT point = {0, 0};
     HRESULT hr;
     RECT rect;
+    char pattern_env[16];
+
+    test_pattern = GetEnvironmentVariableA("WINE_VMR7_TEST_PATTERN", pattern_env,
+            ARRAY_SIZE(pattern_env)) == 1 && pattern_env[0] == '1';
 
     TRACE("iface %p, cookie %#Ix, info %p.\n", iface, cookie, info);
 
@@ -127,12 +137,51 @@ static HRESULT WINAPI image_presenter_PresentImage(IVMRImagePresenter *iface,
     if (info->dwFlags & VMRSample_SrcDstRectsValid)
         FIXME("Ignoring src/dst rects.\n");
 
-    GetClientRect(presenter->window, &rect);
-    point.x = point.y = 0;
-    ClientToScreen(presenter->window, &point);
+    if (!GetClientRect(window, &rect))
+    {
+        TRACE("Skipping frame: GetClientRect failed for window %p, error %lu.\n", window, GetLastError());
+        return S_OK;
+    }
+    if (IsRectEmpty(&rect))
+    {
+        TRACE("Skipping frame: empty client rect %s for window %p.\n", wine_dbgstr_rect(&rect), window);
+        return S_OK;
+    }
+    if (!ClientToScreen(window, &point))
+    {
+        TRACE("Skipping frame: ClientToScreen failed for window %p, error %lu.\n", window, GetLastError());
+        return S_OK;
+    }
     OffsetRect(&rect, point.x, point.y);
-    if (FAILED(hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL)))
-        ERR("Failed to blit, hr %#lx.\n", hr);
+
+    hr = IDirectDrawSurface7_Blt(presenter->primary, &rect, info->lpSurf, NULL, DDBLT_WAIT, NULL);
+    if (FAILED(hr))
+    {
+        DDSURFACEDESC2 src_desc, dst_desc;
+
+        src_desc.dwSize = sizeof(src_desc);
+        dst_desc.dwSize = sizeof(dst_desc);
+        if (SUCCEEDED(IDirectDrawSurface7_GetSurfaceDesc(info->lpSurf, &src_desc))
+                && SUCCEEDED(IDirectDrawSurface7_GetSurfaceDesc(presenter->primary, &dst_desc)))
+            ERR("Failed to blit, hr %#lx, rect %s, src %#lx %lux%lu bpp %lu, dst %#lx %lux%lu bpp %lu.\n",
+                    hr, wine_dbgstr_rect(&rect),
+                    src_desc.ddpfPixelFormat.dwFourCC ? src_desc.ddpfPixelFormat.dwFourCC : src_desc.ddpfPixelFormat.dwRGBBitCount,
+                    src_desc.dwWidth, src_desc.dwHeight, src_desc.ddpfPixelFormat.dwRGBBitCount,
+                    dst_desc.ddpfPixelFormat.dwFourCC ? dst_desc.ddpfPixelFormat.dwFourCC : dst_desc.ddpfPixelFormat.dwRGBBitCount,
+                    dst_desc.dwWidth, dst_desc.dwHeight, dst_desc.ddpfPixelFormat.dwRGBBitCount);
+        else
+            ERR("Failed to blit, hr %#lx, rect %s.\n", hr, wine_dbgstr_rect(&rect));
+    }
+
+    current_frame = InterlockedIncrement(&frame_count);
+    if (!(current_frame % 120))
+        WARN("presentcheck #%ld time %s source %p primary %p rect %s Blt hr %#lx.\n",
+                current_frame, (info->dwFlags & VMRSample_TimeValid) ? debugstr_time(info->rtStart) : "invalid",
+                info->lpSurf, presenter->primary, wine_dbgstr_rect(&rect), hr);
+    if (test_pattern && current_frame <= 30)
+        WARN("patternpresent #%ld time %s primary %p rect %s Blt hr %#lx.\n",
+                current_frame, (info->dwFlags & VMRSample_TimeValid) ? debugstr_time(info->rtStart) : "invalid",
+                presenter->primary, wine_dbgstr_rect(&rect), hr);
 
     return S_OK;
 }
@@ -512,7 +561,12 @@ HRESULT vmr7_presenter_create(IUnknown *outer, IUnknown **out)
         ERR("Failed to set cooperative level, hr %#lx.\n", hr);
 
     if (FAILED(hr = IDirectDraw7_CreateSurface(object->ddraw, &primary_desc, &object->primary, NULL)))
+    {
         ERR("Failed to create primary surface, hr %#lx.\n", hr);
+        IDirectDraw7_Release(object->ddraw);
+        free(object);
+        return hr;
+    }
 
     TRACE("Created VMR7 default presenter %p.\n", object);
     *out = (IUnknown *)&object->IVMRSurfaceAllocator_iface;

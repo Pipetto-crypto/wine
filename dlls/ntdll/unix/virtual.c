@@ -79,7 +79,7 @@
 #undef host_page_size
 #endif
 
-#if defined(HAVE_LINUX_USERFAULTFD_H) && defined(HAVE_LINUX_FS_H)
+#if defined(HAVE_LINUX_USERFAULTFD_H) && defined(HAVE_LINUX_FS_H) && !defined(__ANDROID__)
 # include <linux/userfaultfd.h>
 # include <linux/fs.h>
 #include "uffd_tmp_defs.h"
@@ -314,9 +314,9 @@ static void *address_space_start = (void *)0x110000; /* keep DOS area clear */
 static void *address_space_start = (void *)0x10000;
 #endif
 #ifdef _WIN64
-static void *address_space_limit = (void *)0x7fffffff0000;  /* top of the total available address space */
-static void *user_space_limit    = (void *)0x7fffffff0000;  /* top of the user address space */
-static void *working_set_limit   = (void *)0x7fffffff0000;  /* top of the current working set */
+static void *address_space_limit = (void *)0x7fffff0000;  /* top of the total available address space */
+static void *user_space_limit    = (void *)0x7fffff0000;  /* top of the user address space */
+static void *working_set_limit   = (void *)0x7fffff0000;  /* top of the current working set */
 #else
 static void *address_space_limit = (void *)0xc0000000;
 static void *user_space_limit    = (void *)0x7fff0000;
@@ -831,6 +831,20 @@ static void reserve_area( void *addr, void *end )
 #endif /* __APPLE__ */
 }
 
+/***********************************************************************
+ *           wine_emulator_addr_space_limit
+ *
+ * Upper bound of the address space to use under an emulator. Defaults to the
+ * same 39-bit safe window used by the 39-bit layout patches (512GB - 64KB),
+ * overridable with WINE_EMULATOR_LIMIT=<hex|dec>.
+ */
+static void *wine_emulator_addr_space_limit(void)
+{
+    const char *env = getenv( "WINE_EMULATOR_LIMIT" );
+
+    if (env && *env) return (void *)(ULONG_PTR)strtoull( env, NULL, 0 );
+    return (void *)0x7fffff0000;
+}
 
 static void mmap_init( const struct preload_info *preload_info )
 {
@@ -2617,6 +2631,12 @@ static NTSTATUS map_file_into_view( struct file_view *view, int fd, size_t start
         case EACCES:
         case EPERM:  /* access error, fall back to read() */
             if (vprot & VPROT_WRITE) return STATUS_ACCESS_DENIED;
+            /* Under an x86 emulator the section is only read as data (the code
+             * is translated, never executed from this mapping), so a noexec
+             * filesystem such as /sdcard can still be served by the read()
+             * fallback below instead of failing the image load. */
+            if ((vprot & VPROT_EXEC) && wine_emulator_detected())
+                WARN( "box64/emu compat: noexec exec map relaxed, falling back to read\n" );
             break;
         default:
             ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",
@@ -3904,6 +3924,17 @@ void virtual_init(void)
 #else
     host_addr_space_limit = address_space_limit;
 #endif
+
+    if (wine_emulator_detected())
+    {
+        void *limit = wine_emulator_addr_space_limit();
+
+        address_space_limit = limit;
+        user_space_limit    = limit;
+        working_set_limit   = limit;
+        host_addr_space_limit = limit;
+        WARN( "box64/emu compat: address space limited to %p\n", limit );
+    }
 
     kernel_writewatch_init();
 

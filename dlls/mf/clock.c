@@ -832,6 +832,9 @@ static HRESULT present_clock_schedule_timer(struct presentation_clock *clock, DW
 
     if (flags & MFTIMER_RELATIVE)
     {
+        if (!clock->time_source)
+            return MF_E_CLOCK_NO_TIME_SOURCE;
+
         if (FAILED(hr = IMFPresentationTimeSource_GetCorrelatedTime(clock->time_source, 0, &clocktime, &systime)))
         {
             WARN("Failed to get clock time, hr %#lx.\n", hr);
@@ -912,6 +915,7 @@ static HRESULT WINAPI present_clock_timer_SetTimer(IMFTimer *iface, DWORD flags,
     if (SUCCEEDED(hr))
     {
         list_add_tail(&clock->timers, &clock_timer->entry);
+
         if (cancel_key)
         {
             *cancel_key = &clock_timer->IUnknown_iface;

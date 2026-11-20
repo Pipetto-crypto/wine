@@ -93,7 +93,7 @@ static HRESULT video_format_from_media_type(IMFMediaType *media_type, MFVIDEOFOR
             memset(mpeg, 0, mpeg_size);
             mpeg->hdr = **format;
 
-            IMFMediaType_GetBlob(media_type, &MF_MT_MPEG_SEQUENCE_HEADER, mpeg->sequence_header, len, NULL);
+            IMFMediaType_GetBlob(media_type, &MF_MT_MPEG_SEQUENCE_HEADER, mpeg->sequence_header, len, &mpeg->sequence_header_count);
             IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG_START_TIME_CODE, (UINT32 *)&mpeg->start_time_code);
             IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG2_PROFILE, &mpeg->profile);
             IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG2_LEVEL, &mpeg->level);
@@ -161,17 +161,16 @@ static HRESULT wg_media_type_to_mf(const struct wg_media_type *wg_media_type, IM
     return E_NOTIMPL;
 }
 
-wg_parser_t wg_parser_create(bool output_compressed, bool use_opengl)
+wg_parser_t wg_parser_create(UINT32 flags)
 {
     struct wg_parser_create_params params =
     {
-        .output_compressed = output_compressed,
-        .use_opengl = use_opengl,
+        .flags = flags,
         .err_on = ERR_ON(quartz),
         .warn_on = WARN_ON(quartz),
     };
 
-    TRACE("output_compressed %d.\n", output_compressed);
+    TRACE("flags %#x.\n", flags);
 
     if (WINE_UNIX_CALL(unix_wg_parser_create, &params))
         return 0;
@@ -474,11 +473,11 @@ HRESULT wg_transform_create_quartz(const AM_MEDIA_TYPE *input_format, const AM_M
 
     /* through IMFMediaType to normalize representation to MFVIDEOFORMAT / WAVEFORMATEX */
     if (FAILED(hr = MFCreateMediaTypeFromRepresentation(AM_MEDIA_TYPE_REPRESENTATION, (void *)input_format, &input_type)))
-        return 0;
+        return hr;
     if (FAILED(hr = MFCreateMediaTypeFromRepresentation(AM_MEDIA_TYPE_REPRESENTATION, (void *)output_format, &output_type)))
     {
         IMFMediaType_Release(input_type);
-        return 0;
+        return hr;
     }
 
     hr = wg_transform_create_mf(input_type, output_type, attrs, transform);

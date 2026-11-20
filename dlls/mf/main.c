@@ -835,7 +835,10 @@ static HRESULT mf_get_handler_strings(const WCHAR *path, WCHAR filter, unsigned 
         while (!RegEnumKeyExW(hkey, index++, buffW, &size, NULL, NULL, NULL, NULL))
         {
             if (filter && !wcschr(buffW, filter))
+            {
+                size = maxlen;
                 continue;
+            }
 
             if (FAILED(hr = prop_string_vector_append(dst, &capacity, i > 0, buffW)))
                 break;
@@ -953,6 +956,18 @@ HRESULT WINAPI MFEnumDeviceSources(IMFAttributes *attributes, IMFActivate ***sou
         return enum_audio_capture_sources(attributes, sources, ret_count);
 
     return E_INVALIDARG;
+}
+
+/***********************************************************************
+ *      MFCreateDeviceSource (mf.@)
+ */
+HRESULT WINAPI MFCreateDeviceSource(IMFAttributes *attributes, IMFMediaSource **source)
+{
+    FIXME("%p %p: stub!\n", attributes, source);
+
+    if (!attributes || !source) return E_INVALIDARG;
+    *source = NULL;
+    return E_NOTIMPL;
 }
 
 struct simple_type_handler

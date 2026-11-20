@@ -1673,6 +1673,32 @@ static HRESULT WINAPI media_player_GetAspectRatioMode(IMFPMediaPlayer *iface,
     return hr;
 }
 
+static HRESULT WINAPI media_player_SetVideoWindow(IMFPMediaPlayer *iface, HWND window)
+{
+    struct media_player *player = impl_from_IMFPMediaPlayer(iface);
+    IMFVideoDisplayControl *display_control;
+    HRESULT hr;
+
+    TRACE("%p, %p.\n", iface, window);
+
+    if (window && !IsWindow(window))
+        return E_INVALIDARG;
+
+    player->output_window = window;
+
+    /* The session may not have a presenter yet. Remember the window anyway;
+     * UpdateVideo() re-applies the position once the topology exists. */
+    if (SUCCEEDED(hr = media_player_get_display_control(player, &display_control)))
+    {
+        hr = IMFVideoDisplayControl_SetVideoWindow(display_control, window);
+        IMFVideoDisplayControl_Release(display_control);
+    }
+    else
+        hr = S_OK;
+
+    return hr;
+}
+
 static HRESULT WINAPI media_player_GetVideoWindow(IMFPMediaPlayer *iface, HWND *window)
 {
     struct media_player *player = impl_from_IMFPMediaPlayer(iface);
@@ -1812,6 +1838,7 @@ static const IMFPMediaPlayerVtbl media_player_vtbl =
     media_player_GetVideoSourceRect,
     media_player_SetAspectRatioMode,
     media_player_GetAspectRatioMode,
+    media_player_SetVideoWindow,
     media_player_GetVideoWindow,
     media_player_UpdateVideo,
     media_player_SetBorderColor,

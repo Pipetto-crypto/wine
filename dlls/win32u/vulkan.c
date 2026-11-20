@@ -26,6 +26,7 @@
 
 #include <math.h>
 #include <dlfcn.h>
+#include <math.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <assert.h>
@@ -36,6 +37,7 @@
 #include "ntuser_private.h"
 
 #include "fsr_spv.h"
+#include "artcnn_spv.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 
@@ -166,7 +168,7 @@ struct fs_hack_upscaler
         struct {
             BOOL fp16;
             BOOL lite;
-            float sharpness;
+            float sharpness, saturation;
         } fsr;
         struct {
         } nis;
@@ -185,6 +187,23 @@ static BOOL fs_hack_is_integer(void)
     }
     return is_int;
 }
+
+enum
+{
+    ARTCNN_GROUP_SIZE = 8,
+    ARTCNN_SCRATCH_COUNT = 3,
+    ARTCNN_PASS_COUNT = 8,
+};
+
+struct fs_hack_artcnn_image
+{
+    VkImageView input_view;
+    VkImageView output_view;
+    VkImage scratch[ARTCNN_SCRATCH_COUNT];
+    VkImageView scratch_views[ARTCNN_SCRATCH_COUNT];
+    VkDeviceMemory memory;
+    VkDescriptorSet sets[ARTCNN_PASS_COUNT];
+};
 
 struct fs_hack_image
 {
@@ -220,7 +239,8 @@ struct swapchain
     /* fs hack data below */
     UINT fshack_dpi;
     VkExtent2D host_extents;
-    VkCommandPool *cmd_pools; /* VkCommandPool[device->queue_count] */
+    VkCommandPool *cmd_pools; /* indexed by queue family, not queue */
+    uint32_t cmd_pool_count;
     VkDeviceMemory user_image_memory, fsr_image_memory;
     uint32_t n_images;
     struct fs_hack_image *fs_hack_images; /* struct fs_hack_image[n_images] */
@@ -233,6 +253,12 @@ struct swapchain
     struct fs_comp_pipeline blit_pipeline;
     struct fs_comp_pipeline fsr_easu_pipeline;
     struct fs_comp_pipeline fsr_rcas_pipeline;
+
+    struct fs_hack_artcnn_image *artcnn_images;
+    VkDescriptorPool artcnn_pool;
+    VkDescriptorSetLayout artcnn_layout;
+    VkSampler artcnn_sampler;
+    struct fs_comp_pipeline artcnn_pipelines[ARTCNN_PASS_COUNT];
 };
 
 static struct swapchain *swapchain_from_handle( VkSwapchainKHR handle )
@@ -1427,6 +1453,7 @@ static VkResult win32u_vkCreateDevice( VkPhysicalDevice client_physical_device, 
                                        const VkAllocationCallbacks *allocator, VkDevice *client_device_ptr )
 {
     VkDeviceCreateInfo *create_info = (VkDeviceCreateInfo *)client_create_info; /* cast away const, chain has been copied in the thunks */
+    VkPhysicalDeviceFeatures features = {0};
     struct vulkan_physical_device *physical_device = vulkan_physical_device_from_handle( client_physical_device );
     struct vulkan_instance *instance = physical_device->instance;
     VkDevice host_device, client_device = *client_device_ptr;
@@ -1434,7 +1461,6 @@ static VkResult win32u_vkCreateDevice( VkPhysicalDevice client_physical_device, 
     unsigned int queue_count, props_count, i;
     struct vulkan_device *device;
     struct mempool pool = {0};
-    VkPhysicalDeviceFeatures features = {0};
     VkResult res;
 
     if (TRACE_ON(vulkan))
@@ -2689,7 +2715,8 @@ static void destroy_pipeline(struct vulkan_device *device, struct fs_comp_pipeli
     pipeline->pipeline_layout = VK_NULL_HANDLE;
 }
 
-static VkResult create_pipeline( struct vulkan_device *device, struct swapchain *swapchain, const uint32_t *code, uint32_t code_size, uint32_t push_size, struct fs_comp_pipeline *pipeline )
+static VkResult create_pipeline( struct vulkan_device *device, VkDescriptorSetLayout layout, const uint32_t *code,
+                                 uint32_t code_size, uint32_t push_size, struct fs_comp_pipeline *pipeline )
 {
     VkComputePipelineCreateInfo pipelineInfo = {0};
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = {0};
@@ -2706,7 +2733,7 @@ static VkResult create_pipeline( struct vulkan_device *device, struct swapchain 
 
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &swapchain->descriptor_set_layout;
+    pipelineLayoutInfo.pSetLayouts = &layout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstants;
 
@@ -2918,24 +2945,24 @@ static VkResult init_compute_state( struct vulkan_device *device, struct swapcha
         goto fail;
     }
 
-    if ((res = create_pipeline( device, swapchain, blit_comp_spv, sizeof(blit_comp_spv),
+    if ((res = create_pipeline( device, swapchain->descriptor_set_layout, blit_comp_spv, sizeof(blit_comp_spv),
                                 4 * sizeof(float) /* 2 * vec2 */, &swapchain->blit_pipeline )))
         goto fail;
 
     if (swapchain->upscaler.is_fsr)
     {
         if (swapchain->upscaler.fsr.lite) {
-            if ((res = create_pipeline( device, swapchain, fsr_easu_lite_comp_spv, sizeof(fsr_easu_lite_comp_spv),
+            if ((res = create_pipeline( device, swapchain->descriptor_set_layout, fsr_easu_lite_comp_spv, sizeof(fsr_easu_lite_comp_spv),
                                         16 * sizeof(uint32_t) /* 4 * uvec4 */, &swapchain->fsr_easu_pipeline )))
                 goto fail;
         }
         else
         {
-            if ((res = create_pipeline( device, swapchain, fsr_easu_comp_spv, sizeof(fsr_easu_comp_spv),
+            if ((res = create_pipeline( device, swapchain->descriptor_set_layout, fsr_easu_comp_spv, sizeof(fsr_easu_comp_spv),
                                         16 * sizeof(uint32_t) /* 4 * uvec4 */, &swapchain->fsr_easu_pipeline )))
                 goto fail;
         }
-        if ((res = create_pipeline( device, swapchain, fsr_rcas_comp_spv, sizeof(fsr_rcas_comp_spv),
+        if ((res = create_pipeline( device, swapchain->descriptor_set_layout, fsr_rcas_comp_spv, sizeof(fsr_rcas_comp_spv),
                                     8 * sizeof(uint32_t) /* uvec4 + ivec4 */, &swapchain->fsr_rcas_pipeline )))
             goto fail;
 
@@ -3105,14 +3132,307 @@ fail:
     return res;
 }
 
+static void destroy_artcnn_state( struct vulkan_device *device, struct swapchain *swapchain )
+{
+    if (!swapchain->artcnn_images) return;
+
+    device->p_vkDestroyDescriptorPool( device->host.device, swapchain->artcnn_pool, NULL );
+    for (unsigned int i = 0; i < ARTCNN_PASS_COUNT; ++i)
+        destroy_pipeline( device, &swapchain->artcnn_pipelines[i] );
+    device->p_vkDestroyDescriptorSetLayout( device->host.device, swapchain->artcnn_layout, NULL );
+    device->p_vkDestroySampler( device->host.device, swapchain->artcnn_sampler, NULL );
+
+    for (uint32_t i = 0; i < swapchain->n_images; ++i)
+    {
+        struct fs_hack_artcnn_image *image = &swapchain->artcnn_images[i];
+
+        device->p_vkDestroyImageView( device->host.device, image->input_view, NULL );
+        device->p_vkDestroyImageView( device->host.device, image->output_view, NULL );
+        for (unsigned int j = 0; j < ARTCNN_SCRATCH_COUNT; ++j)
+        {
+            device->p_vkDestroyImageView( device->host.device, image->scratch_views[j], NULL );
+            device->p_vkDestroyImage( device->host.device, image->scratch[j], NULL );
+        }
+        device->p_vkFreeMemory( device->host.device, image->memory, NULL );
+    }
+    free( swapchain->artcnn_images );
+    swapchain->artcnn_images = NULL;
+    swapchain->artcnn_pool = VK_NULL_HANDLE;
+    swapchain->artcnn_layout = VK_NULL_HANDLE;
+    swapchain->artcnn_sampler = VK_NULL_HANDLE;
+}
+
+static VkResult init_artcnn_image( struct vulkan_device *device, struct swapchain *swapchain, uint32_t index,
+                                   const VkPhysicalDeviceMemoryProperties *memory_props, VkDeviceSize *budget )
+{
+    struct fs_hack_artcnn_image *image = &swapchain->artcnn_images[index];
+    const struct fs_hack_image *hack = &swapchain->fs_hack_images[index];
+    /* Slot 0 holds the first convolution for the skip connection. Slots 1/2
+     * ping-pong; conv6 only writes the upper-left W x H of its destination.
+     * Slot 3 denotes the user image on input, or the host swapchain on output.
+     */
+    static const unsigned int src[ARTCNN_PASS_COUNT] = {3, 0, 1, 2, 1, 2, 1, 2};
+    static const unsigned int dst[ARTCNN_PASS_COUNT] = {0, 1, 2, 1, 2, 1, 2, 3};
+    VkDeviceSize offsets[ARTCNN_SCRATCH_COUNT], size = 0;
+    VkImageCreateInfo image_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    VkImageViewCreateInfo view_info = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    VkMemoryAllocateInfo memory_info = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    VkDescriptorSetAllocateInfo set_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    VkImageView inputs[ARTCNN_SCRATCH_COUNT + 1], outputs[ARTCNN_SCRATCH_COUNT + 1];
+    uint32_t memory_types = ~0u;
+    VkResult res;
+
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    image_info.extent = (VkExtent3D){swapchain->extents.width * 2, swapchain->extents.height * 2, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    for (unsigned int i = 0; i < ARTCNN_SCRATCH_COUNT; ++i)
+    {
+        VkMemoryRequirements req;
+        VkDeviceSize padding;
+
+        if ((res = device->p_vkCreateImage( device->host.device, &image_info, NULL, &image->scratch[i] ))) return res;
+        device->p_vkGetImageMemoryRequirements( device->host.device, image->scratch[i], &req );
+        padding = (req.alignment - size % req.alignment) % req.alignment;
+        if (padding > *budget - size || req.size > *budget - size - padding)
+        {
+            WARN( "ArtCNN scratch allocation exceeds the swapchain budget (image %u, slot %u).\n", index, i );
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+        offsets[i] = size + padding;
+        size = offsets[i] + req.size;
+        memory_types &= req.memoryTypeBits;
+    }
+
+    for (memory_info.memoryTypeIndex = 0; memory_info.memoryTypeIndex < memory_props->memoryTypeCount;
+         ++memory_info.memoryTypeIndex)
+    {
+        if (!(memory_types & (1u << memory_info.memoryTypeIndex))) continue;
+        if (memory_props->memoryTypes[memory_info.memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+            break;
+    }
+    if (memory_info.memoryTypeIndex == memory_props->memoryTypeCount) return VK_ERROR_FEATURE_NOT_PRESENT;
+    memory_info.allocationSize = size;
+    if ((res = device->p_vkAllocateMemory( device->host.device, &memory_info, NULL, &image->memory ))) return res;
+    *budget -= size;
+
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = image_info.format;
+    view_info.subresourceRange = (VkImageSubresourceRange){VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    for (unsigned int i = 0; i < ARTCNN_SCRATCH_COUNT; ++i)
+    {
+        view_info.image = image->scratch[i];
+        if ((res = device->p_vkBindImageMemory( device->host.device, view_info.image, image->memory, offsets[i] ))) return res;
+        if ((res = device->p_vkCreateImageView( device->host.device, &view_info, NULL, &image->scratch_views[i] ))) return res;
+        inputs[i] = outputs[i] = image->scratch_views[i];
+    }
+
+    /* The model expects nonlinear luma, including for an sRGB source swapchain. */
+    view_info.image = hack->user_image;
+    view_info.format = VK_FORMAT_B8G8R8A8_UNORM;
+    if ((res = device->p_vkCreateImageView( device->host.device, &view_info, NULL, &image->input_view ))) return res;
+    view_info.image = hack->swapchain_image;
+    if ((res = device->p_vkCreateImageView( device->host.device, &view_info, NULL, &image->output_view ))) return res;
+    inputs[ARTCNN_SCRATCH_COUNT] = image->input_view;
+    outputs[ARTCNN_SCRATCH_COUNT] = image->output_view;
+
+    set_info.descriptorPool = swapchain->artcnn_pool;
+    set_info.descriptorSetCount = 1;
+    set_info.pSetLayouts = &swapchain->artcnn_layout;
+    for (unsigned int i = 0; i < ARTCNN_PASS_COUNT; ++i)
+    {
+        unsigned int aux = i == ARTCNN_PASS_COUNT - 2 ? 0 : ARTCNN_SCRATCH_COUNT;
+        VkDescriptorImageInfo info[] =
+        {
+            {swapchain->artcnn_sampler, inputs[src[i]], src[i] == ARTCNN_SCRATCH_COUNT
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL},
+            {VK_NULL_HANDLE, outputs[dst[i]], VK_IMAGE_LAYOUT_GENERAL},
+            {swapchain->artcnn_sampler, inputs[aux], aux == ARTCNN_SCRATCH_COUNT
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL},
+        };
+        VkWriteDescriptorSet writes[ARRAY_SIZE(info)] = {{0}};
+
+        if ((res = device->p_vkAllocateDescriptorSets( device->host.device, &set_info, &image->sets[i] ))) return res;
+        for (unsigned int j = 0; j < ARRAY_SIZE(info); ++j)
+        {
+            writes[j].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[j].dstSet = image->sets[i];
+            writes[j].dstBinding = j;
+            writes[j].descriptorCount = 1;
+            writes[j].descriptorType = j == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[j].pImageInfo = &info[j];
+        }
+        device->p_vkUpdateDescriptorSets( device->host.device, ARRAY_SIZE(writes), writes, 0, NULL );
+    }
+    return VK_SUCCESS;
+}
+
+static VkResult init_artcnn_state( struct vulkan_device *device, struct swapchain *swapchain,
+                                   const VkSwapchainCreateInfoKHR *create_info )
+{
+    static const struct {const uint32_t *code; uint32_t size;} shaders[] =
+    {
+#define ARTCNN_SHADER(name) {artcnn_##name##_comp_spv, sizeof(artcnn_##name##_comp_spv)}
+        ARTCNN_SHADER(conv0), ARTCNN_SHADER(conv1), ARTCNN_SHADER(conv2), ARTCNN_SHADER(conv3),
+        ARTCNN_SHADER(conv4), ARTCNN_SHADER(conv5), ARTCNN_SHADER(conv6), ARTCNN_SHADER(reconstruct),
+#undef ARTCNN_SHADER
+    };
+    static const VkDescriptorSetLayoutBinding bindings[] =
+    {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL},
+    };
+    struct vulkan_physical_device *physical_device = device->physical_device;
+    struct vulkan_instance *instance = physical_device->instance;
+    VkDescriptorSetLayoutCreateInfo layout_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    VkDescriptorPoolCreateInfo pool_info = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    VkSamplerCreateInfo sampler_info = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    VkDescriptorPoolSize pool_sizes[2];
+    VkPhysicalDeviceMemoryProperties memory_props;
+    VkPhysicalDeviceProperties device_props;
+    VkFormatProperties3 output_props = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+    VkFormatProperties2 format_props2 = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &output_props};
+    VkImageFormatProperties format_props;
+    /* Actual allocations (including padding) across all swapchain images. */
+    const VkDeviceSize scratch_limit = 256 * 1024 * 1024;
+    VkDeviceSize budget = scratch_limit;
+    VkResult res;
+
+    if (create_info->imageColorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR || create_info->imageArrayLayers != 1
+            || srgb_to_unorm( create_info->imageFormat ) != VK_FORMAT_B8G8R8A8_UNORM
+            || create_info->flags & VK_SWAPCHAIN_CREATE_PROTECTED_BIT_KHR || fs_hack_is_integer())
+    {
+        WARN( "ArtCNN requires a single-layer, unprotected SDR BGRA8 swapchain without integer scaling.\n" );
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    /* Match the original shader's minimum upscale on both axes. */
+    if (!swapchain->extents.width || !swapchain->extents.height
+            || (uint64_t)swapchain->host_extents.width * 10 <= (uint64_t)swapchain->extents.width * 13
+            || (uint64_t)swapchain->host_extents.height * 10 <= (uint64_t)swapchain->extents.height * 13)
+    {
+        WARN( "ArtCNN needs an upscale greater than 1.3x on both axes (%ux%u -> %ux%u).\n",
+              swapchain->extents.width, swapchain->extents.height,
+              swapchain->host_extents.width, swapchain->host_extents.height );
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+
+    /* BGRA8 is not in the Vulkan 1.0 list covered by the device-wide
+     * shaderStorageImageWriteWithoutFormat feature alone.
+     */
+    instance->p_vkGetPhysicalDeviceProperties( physical_device->host.physical_device, &device_props );
+    if (device_props.apiVersion < VK_API_VERSION_1_3 && !physical_device->extensions.has_VK_KHR_format_feature_flags2)
+    {
+        WARN( "ArtCNN requires Vulkan 1.3 format properties or VK_KHR_format_feature_flags2.\n" );
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    if (instance->p_vkGetPhysicalDeviceFormatProperties2KHR)
+        instance->p_vkGetPhysicalDeviceFormatProperties2KHR( physical_device->host.physical_device,
+                VK_FORMAT_B8G8R8A8_UNORM, &format_props2 );
+    else if (instance->p_vkGetPhysicalDeviceFormatProperties2)
+        instance->p_vkGetPhysicalDeviceFormatProperties2( physical_device->host.physical_device,
+                VK_FORMAT_B8G8R8A8_UNORM, &format_props2 );
+    else
+    {
+        WARN( "ArtCNN cannot query BGRA8 storage-image format features.\n" );
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    if (!(output_props.optimalTilingFeatures & VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT))
+    {
+        WARN( "ArtCNN requires BGRA8 storage writes without a shader image format.\n" );
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+
+    if ((res = instance->p_vkGetPhysicalDeviceImageFormatProperties( physical_device->host.physical_device,
+            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 0, &format_props )))
+    {
+        WARN( "ArtCNN cannot use RGBA16F sampled/storage scratch images, res %d.\n", res );
+        return res;
+    }
+    if (swapchain->extents.width > format_props.maxExtent.width / 2
+            || swapchain->extents.height > format_props.maxExtent.height / 2)
+    {
+        WARN( "ArtCNN scratch extent exceeds the RGBA16F image size limit.\n" );
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
+    if (swapchain->n_images > UINT32_MAX / (2 * ARTCNN_PASS_COUNT)) return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+    if (!(swapchain->artcnn_images = calloc( swapchain->n_images, sizeof(*swapchain->artcnn_images) )))
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+    /* All shaders manually fetch texels; no linear-filtering feature required. */
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if ((res = device->p_vkCreateSampler( device->host.device, &sampler_info, NULL, &swapchain->artcnn_sampler ))) goto fail;
+
+    layout_info.bindingCount = ARRAY_SIZE(bindings);
+    layout_info.pBindings = bindings;
+    if ((res = device->p_vkCreateDescriptorSetLayout( device->host.device, &layout_info, NULL, &swapchain->artcnn_layout )))
+        goto fail;
+
+    pool_info.maxSets = swapchain->n_images * ARTCNN_PASS_COUNT;
+    pool_sizes[0] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, pool_info.maxSets * 2};
+    pool_sizes[1] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, pool_info.maxSets};
+    pool_info.poolSizeCount = ARRAY_SIZE(pool_sizes);
+    pool_info.pPoolSizes = pool_sizes;
+    if ((res = device->p_vkCreateDescriptorPool( device->host.device, &pool_info, NULL, &swapchain->artcnn_pool ))) goto fail;
+
+    instance->p_vkGetPhysicalDeviceMemoryProperties( physical_device->host.physical_device, &memory_props );
+    for (uint32_t i = 0; i < swapchain->n_images; ++i)
+        if ((res = init_artcnn_image( device, swapchain, i, &memory_props, &budget ))) goto fail;
+
+    for (unsigned int i = 0; i < ARRAY_SIZE(shaders); ++i)
+        if ((res = create_pipeline( device, swapchain->artcnn_layout, shaders[i].code, shaders[i].size,
+                4 * sizeof(uint32_t), &swapchain->artcnn_pipelines[i] ))) goto fail;
+    TRACE( "ArtCNN allocated %.1f MiB scratch for %u swapchain images.\n",
+           (double)(scratch_limit - budget) / (1024 * 1024), swapchain->n_images );
+    return VK_SUCCESS;
+
+fail:
+    destroy_artcnn_state( device, swapchain );
+    return res;
+}
+
+static VkResult init_fullscreen_scaler( struct vulkan_device *device, struct swapchain *swapchain,
+                                        const VkSwapchainCreateInfoKHR *create_info )
+{
+    BOOL try_artcnn = fs_hack_is_artcnn();
+    VkResult res;
+
+    if (try_artcnn)
+    {
+        res = init_artcnn_state( device, swapchain, create_info );
+        if (res == VK_SUCCESS || res == VK_ERROR_DEVICE_LOST) return res;
+        WARN( "ArtCNN C4F16 unavailable for swapchain %p, trying fallback (res %d).\n", swapchain, res );
+    }
+
+    res = init_compute_state( device, swapchain );
+    if (try_artcnn && swapchain->upscaler.is_fsr && res != VK_SUCCESS && res != VK_ERROR_DEVICE_LOST)
+    {
+        WARN( "FSR fallback unavailable for swapchain %p, trying blit (res %d).\n", swapchain, res );
+        swapchain->upscaler.is_fsr = FALSE;
+        res = init_compute_state( device, swapchain );
+    }
+    return res;
+}
+
 static void destroy_fs_hack_image( struct vulkan_device *device, struct swapchain *swapchain, struct fs_hack_image *hack )
 {
+    if (hack->cmd) device->p_vkFreeCommandBuffers( device->host.device, swapchain->cmd_pools[hack->cmd_queue_idx], 1, &hack->cmd );
     device->p_vkDestroyImageView( device->host.device, hack->user_view, NULL );
     device->p_vkDestroyImageView(device->host.device, hack->swapchain_view, NULL);
     device->p_vkDestroyImageView(device->host.device, hack->fsr_view, NULL);
     device->p_vkDestroyImage( device->host.device, hack->user_image, NULL );
     device->p_vkDestroyImage(device->host.device, hack->fsr_image, NULL);
-    if (hack->cmd) device->p_vkFreeCommandBuffers( device->host.device, swapchain->cmd_pools[hack->cmd_queue_idx], 1, &hack->cmd );
     device->p_vkDestroySemaphore( device->host.device, hack->blit_finished, NULL );
 }
 
@@ -3121,7 +3441,7 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
 {
     struct vulkan_physical_device *physical_device = device->physical_device;
     struct vulkan_instance *instance = physical_device->instance;
-    VkResult res;
+    VkResult res = VK_ERROR_OUT_OF_HOST_MEMORY;
     VkImage *real_images = NULL;
     VkDeviceSize userMemTotal = 0, offs;
     VkImageCreateInfo imageInfo = {0};
@@ -3139,9 +3459,15 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
     }
 
     real_images = malloc( count * sizeof(VkImage) );
-    swapchain->cmd_pools = calloc( device->queue_count, sizeof(VkCommandPool) );
+    for (uint64_t q = 0; q < device->queue_count; ++q)
+        swapchain->cmd_pool_count = max( swapchain->cmd_pool_count, device->queues[q].info.queueFamilyIndex + 1 );
+    swapchain->cmd_pools = calloc( swapchain->cmd_pool_count, sizeof(*swapchain->cmd_pools) );
     swapchain->fs_hack_images = calloc( count, sizeof(struct fs_hack_image) );
-    if (!real_images || !swapchain->cmd_pools || !swapchain->fs_hack_images) goto fail;
+    if (!real_images || !swapchain->cmd_pools || !swapchain->fs_hack_images)
+    {
+        res = VK_ERROR_OUT_OF_HOST_MEMORY;
+        goto fail;
+    }
 
     if ((res = device->p_vkGetSwapchainImagesKHR( device->host.device, swapchain->obj.host.swapchain, &count, real_images )))
     {
@@ -3154,6 +3480,7 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
     {
         struct fs_hack_image *hack = &swapchain->fs_hack_images[i];
 
+        swapchain->n_images++;
         hack->swapchain_image = real_images[i];
 
         semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -3200,7 +3527,6 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
 
         userMemTotal += userMemReq.size;
 
-        swapchain->n_images++;
     }
 
     /* allocate backing memory */
@@ -3278,6 +3604,7 @@ static VkResult init_fs_hack_images( struct vulkan_device *device, struct swapch
 
 fail:
     for (i = 0; i < swapchain->n_images; ++i) destroy_fs_hack_image( device, swapchain, &swapchain->fs_hack_images[i] );
+    device->p_vkFreeMemory( device->host.device, swapchain->user_image_memory, NULL );
     free( real_images );
     free( swapchain->cmd_pools );
     free( swapchain->fs_hack_images );
@@ -3325,7 +3652,7 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
     RECT client_rect;
     VkResult res;
     BOOL lite;
-    float sharpness;
+    float sharpness, saturation;
 
     if (!NtUserIsWindow( surface->hwnd ))
     {
@@ -3362,11 +3689,31 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
     if ((swapchain->fshack_dpi = surface_get_fshack_dpi( surface )))
     {
         if (!(capabilities.supportedUsageFlags & VK_IMAGE_USAGE_STORAGE_BIT))
-            FIXME( "Swapchain does not support required VK_IMAGE_USAGE_STORAGE_BIT\n" );
+        {
+            WARN( "Swapchain does not support required VK_IMAGE_USAGE_STORAGE_BIT\n" );
+            free( swapchain );
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        }
 
-        swapchain->upscaler.is_fsr = fs_hack_is_fsr(&lite, &sharpness);
+        swapchain->upscaler.is_fsr = fs_hack_is_fsr(&lite, &sharpness, &saturation);
+        if (swapchain->upscaler.is_fsr)
+        {
+            VkFormatProperties properties;
+            VkFormatFeatureFlags required = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+
+            instance->p_vkGetPhysicalDeviceFormatProperties( physical_device->host.physical_device,
+                    VK_FORMAT_A2B10G10R10_UNORM_PACK32, &properties );
+            if ((properties.optimalTilingFeatures & required) != required)
+            {
+                WARN( "FSR intermediate format is unsupported, using ordinary fullscreen scaling.\n" );
+                swapchain->upscaler.is_fsr = FALSE;
+            }
+        }
         swapchain->upscaler.fsr.lite = lite;
         swapchain->upscaler.fsr.sharpness = sharpness;
+        swapchain->upscaler.fsr.saturation = create_info->imageColorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
+                (create_info->imageFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+                 create_info->imageFormat == VK_FORMAT_B8G8R8A8_SRGB) ? saturation : 1.0f;
         swapchain->host_extents = capabilities.minImageExtent;
         create_info_host.imageExtent = capabilities.minImageExtent;
         create_info_host.imageFormat = swapchain->upscaler.is_fsr ? VK_FORMAT_B8G8R8A8_SRGB: VK_FORMAT_B8G8R8A8_UNORM;
@@ -3377,7 +3724,6 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
         if (swapchain->upscaler.is_fsr) {
             swapchain->format = srgb_to_unorm(swapchain->format);
             create_info_host.imageFormat = srgb_to_unorm(create_info_host.imageFormat);
-            create_info_host.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT; /* XXX: check if supported by surface */
         }
 
         if (create_info->imageFormat != VK_FORMAT_B8G8R8A8_UNORM && create_info->imageFormat != VK_FORMAT_B8G8R8A8_SRGB)
@@ -3449,21 +3795,34 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
         if ((res = init_fs_hack_images( device, swapchain, create_info )))
         {
             ERR( "creating fs hack images failed: %d\n", res );
+            surface->swapchain = old_swapchain;
+            InterlockedDecrement( &surface->client->busy_ref );
+            instance->p_remove_object( instance, &swapchain->obj.obj );
             device->p_vkDestroySwapchainKHR( device->host.device, swapchain->obj.host.swapchain, NULL );
             free( swapchain );
             return res;
         }
 
-        if ((res = init_compute_state(device, swapchain)))
+        if ((res = init_fullscreen_scaler( device, swapchain, create_info )))
         {
-            ERR( "creating blit images failed: %d\n", res );
+            ERR( "initializing fullscreen scaler failed: %d\n", res );
+            for (uint32_t i = 0; i < swapchain->n_images; ++i)
+                destroy_fs_hack_image( device, swapchain, &swapchain->fs_hack_images[i] );
+            device->p_vkFreeMemory( device->host.device, swapchain->user_image_memory, NULL );
+            free( swapchain->cmd_pools );
+            free( swapchain->fs_hack_images );
+            surface->swapchain = old_swapchain;
+            InterlockedDecrement( &surface->client->busy_ref );
+            instance->p_remove_object( instance, &swapchain->obj.obj );
             device->p_vkDestroySwapchainKHR( device->host.device, swapchain->obj.host.swapchain, NULL );
             free( swapchain );
             return res;
         }
 
-        WARN( "Enabled fullscreen hack on swapchain %p, scaling from %s -> %s\n", swapchain,
-              debugstr_vkextent2d(&swapchain->extents), debugstr_vkextent2d(&swapchain->host_extents) );
+        WARN( "Enabled fullscreen hack on swapchain %p, scaling from %s -> %s, scaler %s\n", swapchain,
+              debugstr_vkextent2d( &swapchain->extents ), debugstr_vkextent2d( &swapchain->host_extents ),
+              swapchain->artcnn_images ? "ArtCNN C4F16" : swapchain->upscaler.is_fsr
+              ? (swapchain->upscaler.fsr.lite ? "FSR lite" : "FSR") : "blit" );
     }
 
     *ret = swapchain->obj.client.swapchain;
@@ -3483,11 +3842,10 @@ void win32u_vkDestroySwapchainKHR( VkDevice client_device, VkSwapchainKHR client
 
     if (swapchain->fshack_dpi)
     {
+        destroy_artcnn_state( device, swapchain );
         for (uint32_t i = 0; i < swapchain->n_images; ++i)
-        {
             destroy_fs_hack_image( device, swapchain, &swapchain->fs_hack_images[i] );
-        }
-        for (uint32_t i = 0; i < device->queue_count; ++i)
+        for (uint32_t i = 0; i < swapchain->cmd_pool_count; ++i)
         {
             if (!swapchain->cmd_pools[i]) continue;
             device->p_vkDestroyCommandPool( device->host.device, swapchain->cmd_pools[i], NULL );
@@ -3599,10 +3957,10 @@ static VkResult win32u_vkGetSwapchainImagesKHR( VkDevice client_device, VkSwapch
     return device->p_vkGetSwapchainImagesKHR( device->host.device, swapchain->obj.host.swapchain, count, images );
 }
 
-static VkCommandBuffer create_hack_cmd( struct vulkan_queue *queue, struct swapchain *swapchain, uint32_t queue_idx )
+static VkResult create_hack_cmd( struct vulkan_queue *queue, struct swapchain *swapchain, uint32_t queue_idx,
+                                 VkCommandBuffer *cmd )
 {
     VkCommandBufferAllocateInfo allocInfo = {0};
-    VkCommandBuffer cmd;
     VkResult res;
 
     if (!swapchain->cmd_pools[queue_idx])
@@ -3616,7 +3974,7 @@ static VkCommandBuffer create_hack_cmd( struct vulkan_queue *queue, struct swapc
                                                          &swapchain->cmd_pools[queue_idx] )))
         {
             ERR( "vkCreateCommandPool failed, res=%d\n", res );
-            return NULL;
+            return res;
         }
     }
 
@@ -3625,13 +3983,12 @@ static VkCommandBuffer create_hack_cmd( struct vulkan_queue *queue, struct swapc
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = 1;
 
-    if ((res = queue->device->p_vkAllocateCommandBuffers( queue->device->host.device, &allocInfo, &cmd )))
+    if ((res = queue->device->p_vkAllocateCommandBuffers( queue->device->host.device, &allocInfo, cmd )))
     {
         ERR( "vkAllocateCommandBuffers failed, res=%d\n", res );
-        return NULL;
+        *cmd = NULL;
     }
-
-    return cmd;
+    return res;
 }
 
 static void bind_pipeline( struct vulkan_device *device, VkCommandBuffer cmd, struct fs_comp_pipeline *pipeline,
@@ -3674,7 +4031,7 @@ static VkResult record_compute_cmd( struct vulkan_device *device, struct swapcha
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
 
-    device->p_vkBeginCommandBuffer( hack->cmd, &beginInfo );
+    if ((res = device->p_vkBeginCommandBuffer( hack->cmd, &beginInfo ))) return res;
 
     /* for the cs we run... */
     /* transition user image from PRESENT_SRC to SHADER_READ */
@@ -3758,7 +4115,7 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
 
-    device->p_vkBeginCommandBuffer(hack->cmd, &beginInfo);
+    if ((result = device->p_vkBeginCommandBuffer(hack->cmd, &beginInfo))) return result;
 
     /* 1st pass (easu) */
     /* transition user image from PRESENT_SRC to SHADER_READ */
@@ -3769,12 +4126,12 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
     barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     /* storage image... */
-    /* transition fsr image from whatever to GENERAL */
+    /* Discard the intermediate image contents before EASU writes it. */
     barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barriers[1].image = hack->swapchain_image;
+    barriers[1].image = hack->fsr_image;
     barriers[1].srcAccessMask = 0;
-    barriers[1].dstAccessMask = 0;
+    barriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 
     device->p_vkCmdPipelineBarrier( hack->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 0, NULL, 2, barriers );
@@ -3828,10 +4185,10 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
     barriers[0].srcAccessMask = 0;
     barriers[0].dstAccessMask = 0;
 
-    /* transition fsr image from GENERAL to SHADER_READ */
+    /* Make EASU output visible to the RCAS sampling pass. */
     barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     barriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barriers[1].image = hack->swapchain_image;
+    barriers[1].image = hack->fsr_image;
     barriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     barriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
@@ -3840,16 +4197,18 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
     barriers[2].newLayout = VK_IMAGE_LAYOUT_GENERAL;
     barriers[2].image = hack->swapchain_image;
     barriers[2].srcAccessMask = 0;
-    barriers[2].dstAccessMask = 0;
+    barriers[2].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
 
     device->p_vkCmdPipelineBarrier(hack->cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 3, barriers);
+                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL, 0, NULL, 3, barriers);
 
     /* 2nd pass (rcas) */
 
     c.fp[0] = exp2f(-swapchain->upscaler.fsr.sharpness);
-    c.uint[2] = swapchain->host_extents.width;
-    c.uint[3] = swapchain->host_extents.height;
+    c.fp[1] = swapchain->upscaler.fsr.saturation;
+    /* RCAS clamps texel coordinates to these inclusive maxima. */
+    c.uint[2] = swapchain->host_extents.width - 1;
+    c.uint[3] = swapchain->host_extents.height - 1;
     c.uint[4] = 0;
     c.uint[5] = 0;
     c.uint[6] = 0 + swapchain->host_extents.width;
@@ -3863,7 +4222,7 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
 
     /* transition swapchain image from GENERAL to PRESENT_SRC */
     barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     barriers[0].image = hack->swapchain_image;
     barriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     barriers[0].dstAccessMask = 0;
@@ -3879,6 +4238,74 @@ static VkResult record_fsr_cmd(struct vulkan_device *device, struct swapchain *s
     }
 
     return VK_SUCCESS;
+}
+
+static VkResult record_artcnn_cmd( struct vulkan_device *device, struct swapchain *swapchain,
+                                   struct fs_hack_image *hack )
+{
+    struct fs_hack_artcnn_image *image = &swapchain->artcnn_images[hack - swapchain->fs_hack_images];
+    const uint32_t in_width = swapchain->extents.width, in_height = swapchain->extents.height;
+    const uint32_t out_width = swapchain->host_extents.width, out_height = swapchain->host_extents.height;
+    uint32_t constants[] = {in_width, in_height, out_width, out_height};
+    VkImageMemoryBarrier barriers[2 + ARTCNN_SCRATCH_COUNT] = {{0}};
+    VkCommandBufferBeginInfo begin_info = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VkMemoryBarrier pass_barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    VkCommandBuffer cmd = hack->cmd;
+    VkResult res;
+
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+    if ((res = device->p_vkBeginCommandBuffer( cmd, &begin_info ))) return res;
+
+    init_barrier( &barriers[0] );
+    barriers[0].image = hack->user_image;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[0].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    barriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    init_barrier( &barriers[1] );
+    barriers[1].image = hack->swapchain_image;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    for (unsigned int i = 0; i < ARTCNN_SCRATCH_COUNT; ++i)
+    {
+        VkImageMemoryBarrier *barrier = &barriers[i + 2];
+
+        init_barrier( barrier );
+        barrier->image = image->scratch[i];
+        barrier->oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier->newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier->srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier->dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    }
+    device->p_vkCmdPipelineBarrier( cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, NULL, 0, NULL, ARRAY_SIZE(barriers), barriers );
+
+    pass_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    pass_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    for (unsigned int i = 0; i < ARTCNN_PASS_COUNT; ++i)
+    {
+        uint32_t width = i == ARTCNN_PASS_COUNT - 1 ? out_width : in_width;
+        uint32_t height = i == ARTCNN_PASS_COUNT - 1 ? out_height : in_height;
+
+        bind_pipeline( device, cmd, &swapchain->artcnn_pipelines[i], image->sets[i], constants );
+        device->p_vkCmdDispatch( cmd, (width - 1) / ARTCNN_GROUP_SIZE + 1, (height - 1) / ARTCNN_GROUP_SIZE + 1, 1 );
+        if (i + 1 < ARTCNN_PASS_COUNT)
+            device->p_vkCmdPipelineBarrier( cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0, 1, &pass_barrier, 0, NULL, 0, NULL );
+    }
+
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barriers[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barriers[0].dstAccessMask = 0;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barriers[1].dstAccessMask = 0;
+    device->p_vkCmdPipelineBarrier( cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0, 0, NULL, 0, NULL, 2, barriers );
+    return device->p_vkEndCommandBuffer( cmd );
 }
 
 #define win32u_vk_find_struct(s, t) win32u_vk_find_struct_((void *)s, VK_STRUCTURE_TYPE_##t)
@@ -3908,35 +4335,54 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
     VkCommandBuffer *blit_cmds;
     struct mempool pool = {0};
     uint32_t blit_count = 0;
-    VkSemaphore blit_sema;
+    VkSemaphore blit_sema = VK_NULL_HANDLE;
 
     TRACE( "queue %p, present_info %p\n", queue, present_info );
 
     if (!(swapchains = mem_alloc( &pool, present_info->swapchainCount * sizeof(*swapchains) ))) return VK_ERROR_OUT_OF_HOST_MEMORY;
-    if (!(blit_cmds = mem_alloc( &pool, present_info->swapchainCount * sizeof(blit_cmds) ))) goto failed;
+    if (!(blit_cmds = mem_alloc( &pool, present_info->swapchainCount * sizeof(*blit_cmds) ))) goto failed;
 
     for (uint32_t i = 0; i < present_info->swapchainCount; ++i)
     {
         struct swapchain *swapchain = swapchain_from_handle( present_info->pSwapchains[i] );
-        struct fs_hack_image *hack = &swapchain->fs_hack_images[present_info->pImageIndices[i]];
+        struct fs_hack_image *hack;
 
         if (!swapchain->fshack_dpi) continue;
+        hack = &swapchain->fs_hack_images[present_info->pImageIndices[i]];
         blit_sema = hack->blit_finished;
 
         if (!hack->cmd || hack->cmd_queue_idx != queue->info.queueFamilyIndex)
         {
-            if (hack->cmd) device->p_vkFreeCommandBuffers( queue->device->host.device, swapchain->cmd_pools[hack->cmd_queue_idx], 1, &hack->cmd );
-            if (!(queue->device->queue_props[queue->info.queueFamilyIndex].queueFlags & VK_QUEUE_COMPUTE_BIT)) goto failed; /* TODO */
+            VkResult record_res;
 
-            if (!(hack->cmd = create_hack_cmd( queue, swapchain, queue->info.queueFamilyIndex )) ||
-                (swapchain->upscaler.is_fsr ? record_fsr_cmd(queue->device, swapchain, hack) : record_compute_cmd( queue->device, swapchain, hack )))
+            if (!(device->queue_props[queue->info.queueFamilyIndex].queueFlags & VK_QUEUE_COMPUTE_BIT))
             {
-                device->p_vkFreeCommandBuffers( queue->device->host.device, swapchain->cmd_pools[hack->cmd_queue_idx], 1, &hack->cmd );
+                WARN( "Fullscreen scaling requires compute on present queue family %u.\n", queue->info.queueFamilyIndex );
+                res = VK_ERROR_FEATURE_NOT_PRESENT;
+                goto failed;
+            }
+            if (hack->cmd)
+            {
+                device->p_vkFreeCommandBuffers( device->host.device, swapchain->cmd_pools[hack->cmd_queue_idx], 1, &hack->cmd );
                 hack->cmd = NULL;
+            }
+            hack->cmd_queue_idx = queue->info.queueFamilyIndex;
+            if ((record_res = create_hack_cmd( queue, swapchain, hack->cmd_queue_idx, &hack->cmd )))
+            {
+                res = record_res;
                 goto failed;
             }
 
-            hack->cmd_queue_idx = queue->info.queueFamilyIndex;
+            if (swapchain->artcnn_images) record_res = record_artcnn_cmd( device, swapchain, hack );
+            else if (swapchain->upscaler.is_fsr) record_res = record_fsr_cmd( device, swapchain, hack );
+            else record_res = record_compute_cmd( device, swapchain, hack );
+            if (record_res)
+            {
+                device->p_vkFreeCommandBuffers( device->host.device, swapchain->cmd_pools[hack->cmd_queue_idx], 1, &hack->cmd );
+                hack->cmd = NULL;
+                res = record_res;
+                goto failed;
+            }
         }
 
         blit_cmds[blit_count++] = hack->cmd;

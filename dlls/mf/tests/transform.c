@@ -8669,6 +8669,82 @@ static void test_wmv_decoder_media_object(void)
     winetest_pop_context();
 }
 
+static unsigned int test_media_type_copy_all_items_fail_count;
+
+static HRESULT WINAPI test_media_type_CopyAllItems_fail(IMFMediaType *iface, IMFAttributes *dest)
+{
+    (void)iface;
+    (void)dest;
+    ++test_media_type_copy_all_items_fail_count;
+    return E_OUTOFMEMORY;
+}
+
+static void test_color_convert_copy_failure(IMFTransform *transform, BOOL input,
+        const struct attribute_desc *attributes)
+{
+    IMFMediaTypeVtbl mock_vtbl;
+    const IMFMediaTypeVtbl *original_vtbl;
+    IMFMediaType *media_type, *current_type;
+    HRESULT hr;
+    ULONG ref;
+
+    hr = MFCreateMediaType(&media_type);
+    ok(hr == S_OK, "MFCreateMediaType returned %#lx.\n", hr);
+    if (FAILED(hr)) return;
+    init_media_type(media_type, attributes, -1);
+
+    /* Replace only this instance's CopyAllItems slot, and restore it immediately. */
+    original_vtbl = media_type->lpVtbl;
+    mock_vtbl = *original_vtbl;
+    mock_vtbl.CopyAllItems = test_media_type_CopyAllItems_fail;
+    test_media_type_copy_all_items_fail_count = 0;
+    media_type->lpVtbl = &mock_vtbl;
+    if (input)
+        hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+    else
+        hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+    media_type->lpVtbl = original_vtbl;
+    ok(test_media_type_copy_all_items_fail_count == 1, "CopyAllItems called %u times.\n",
+            test_media_type_copy_all_items_fail_count);
+    ok(hr == E_OUTOFMEMORY, "%s CopyAllItems failure returned %#lx.\n",
+            input ? "SetInputType" : "SetOutputType", hr);
+
+    current_type = NULL;
+    if (input)
+        hr = IMFTransform_GetInputCurrentType(transform, 0, &current_type);
+    else
+        hr = IMFTransform_GetOutputCurrentType(transform, 0, &current_type);
+    ok(hr == MF_E_TRANSFORM_TYPE_NOT_SET, "Get%sCurrentType returned %#lx.\n",
+            input ? "Input" : "Output", hr);
+    if (SUCCEEDED(hr)) IMFMediaType_Release(current_type);
+
+    if (input)
+    {
+        hr = IMFTransform_SetInputType(transform, 0, media_type, 0);
+        ok(hr == S_OK, "SetInputType after CopyAllItems failure returned %#lx.\n", hr);
+        current_type = NULL;
+        hr = IMFTransform_GetInputCurrentType(transform, 0, &current_type);
+        ok(hr == S_OK, "GetInputCurrentType after recovery returned %#lx.\n", hr);
+        if (current_type) IMFMediaType_Release(current_type);
+        hr = IMFTransform_SetInputType(transform, 0, NULL, 0);
+        ok(hr == S_OK, "Failed to clear input type, hr %#lx.\n", hr);
+    }
+    else
+    {
+        hr = IMFTransform_SetOutputType(transform, 0, media_type, 0);
+        ok(hr == S_OK, "SetOutputType after CopyAllItems failure returned %#lx.\n", hr);
+        current_type = NULL;
+        hr = IMFTransform_GetOutputCurrentType(transform, 0, &current_type);
+        ok(hr == S_OK, "GetOutputCurrentType after recovery returned %#lx.\n", hr);
+        if (current_type) IMFMediaType_Release(current_type);
+        hr = IMFTransform_SetOutputType(transform, 0, NULL, 0);
+        ok(hr == S_OK, "Failed to clear output type, hr %#lx.\n", hr);
+    }
+
+    ref = IMFMediaType_Release(media_type);
+    ok(!ref, "Release returned %lu.\n", ref);
+}
+
 static void test_color_convert(BOOL use_2d_buffer)
 {
     const GUID *const class_id = &CLSID_CColorConvertDMO;
@@ -9017,6 +9093,13 @@ static void test_color_convert(BOOL use_2d_buffer)
     check_mft_get_attributes(transform, NULL, FALSE);
     check_mft_get_input_stream_info(transform, MF_E_TRANSFORM_TYPE_NOT_SET, NULL);
     check_mft_get_output_stream_info(transform, MF_E_TRANSFORM_TYPE_NOT_SET, NULL);
+
+    /* Failure injection targets Wine's CopyAllItems path, not the native implementation. */
+    if (winetest_platform_is_wine)
+    {
+        test_color_convert_copy_failure(transform, TRUE, input_type_desc);
+        test_color_convert_copy_failure(transform, FALSE, output_type_desc);
+    }
 
     i = -1;
     while (SUCCEEDED(hr = IMFTransform_GetOutputAvailableType(transform, 0, ++i, &media_type)))

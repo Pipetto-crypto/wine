@@ -36895,7 +36895,8 @@ static void test_h264_decoder(void)
     ID3D11VideoDecoderOutputView *output_views[17];
     unsigned int count, size, bitstream_size;
     D3D11_VIDEO_DECODER_EXTENSION extension;
-    D3D11_VIDEO_DECODER_CONFIG config = {0};
+    D3D11_VIDEO_DECODER_CONFIG config = {0}, returned_config;
+    D3D11_VIDEO_DECODER_DESC returned_desc;
     D3D11_TEXTURE2D_DESC texture_desc = {0};
     struct d3d11_test_context test_context;
     DXVA_Slice_H264_Short *h264_slice;
@@ -36969,6 +36970,19 @@ static void test_h264_decoder(void)
     desc.SampleHeight = 240;
     desc.OutputFormat = DXGI_FORMAT_NV12;
 
+    decoder = (ID3D11VideoDecoder *)(UINT_PTR)0xdeadbeef;
+    hr = ID3D11VideoDevice_CreateVideoDecoder(video_device, NULL, &config, &decoder);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    ok(!decoder, "Got decoder %p.\n", decoder);
+
+    decoder = (ID3D11VideoDecoder *)(UINT_PTR)0xdeadbeef;
+    hr = ID3D11VideoDevice_CreateVideoDecoder(video_device, &desc, NULL, &decoder);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+    ok(!decoder, "Got decoder %p.\n", decoder);
+
+    hr = ID3D11VideoDevice_CreateVideoDecoder(video_device, &desc, &config, NULL);
+    ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
+
     hr = ID3D11VideoDevice_GetVideoDecoderConfigCount(video_device, &desc, &count);
     todo_wine ok(hr == S_OK, "Got hr %#lx.\n", hr);
     if (hr == S_OK)
@@ -36979,7 +36993,7 @@ static void test_h264_decoder(void)
     for (unsigned int i = 0; i < count; ++i)
     {
         memset(&config, 0xcc, sizeof(config));
-        hr = ID3D11VideoDevice_GetVideoDecoderConfig(video_device, &desc, 0, &config);
+        hr = ID3D11VideoDevice_GetVideoDecoderConfig(video_device, &desc, i, &config);
         ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
         ok(IsEqualGUID(&config.guidConfigBitstreamEncryption, &DXVA_NoEncrypt),
@@ -37043,6 +37057,18 @@ static void test_h264_decoder(void)
         return;
     }
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    hr = ID3D11VideoDecoder_GetCreationParameters(decoder, &returned_desc, &returned_config);
+    ok(hr == S_OK, "GetCreationParameters returned %#lx.\n", hr);
+    ok(IsEqualGUID(&returned_desc.Guid, &desc.Guid), "Got decoder profile %s, expected %s.\n",
+            debugstr_guid(&returned_desc.Guid), debugstr_guid(&desc.Guid));
+    ok(returned_desc.SampleWidth == desc.SampleWidth, "Got sample width %u, expected %u.\n",
+            returned_desc.SampleWidth, desc.SampleWidth);
+    ok(returned_desc.SampleHeight == desc.SampleHeight, "Got sample height %u, expected %u.\n",
+            returned_desc.SampleHeight, desc.SampleHeight);
+    ok(returned_desc.OutputFormat == desc.OutputFormat, "Got output format %#x, expected %#x.\n",
+            returned_desc.OutputFormat, desc.OutputFormat);
+    ok(!memcmp(&returned_config, &config, sizeof(config)), "Returned decoder config differs from creation config.\n");
 
     texture_desc.Width = 320;
     texture_desc.Height = 240;

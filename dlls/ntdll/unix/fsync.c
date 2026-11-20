@@ -51,6 +51,7 @@
 #include "winternl.h"
 #include "wine/debug.h"
 #include "wine/server.h"
+#include "wine/tgmux_fsync.h"
 
 #include "unix_private.h"
 #include "fsync.h"
@@ -464,14 +465,17 @@ void fsync_init( DWORD pid )
     }
 
     if (stat( config_dir, &st ) == -1)
-        ERR("Cannot stat %s\n", config_dir);
+    {
+        ERR( "Cannot stat %s: %s\n", config_dir, strerror( errno ));
+        exit(1);
+    }
 
     if (st.st_ino != (unsigned long)st.st_ino)
         sprintf( shm_name, "/wine-%lx%08lx-fsync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
     else
         sprintf( shm_name, "/wine-%lx-fsync", (unsigned long)st.st_ino );
 
-    if ((shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1)
+    if ((shm_fd = tgmux_fsync_shm( tgmux_fsync_dir(), shm_name, O_RDWR | O_CLOEXEC, 0 )) == -1)
     {
         /* probably the server isn't running with WINEFSYNC, tell the user and bail */
         if (errno == ENOENT)

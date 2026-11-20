@@ -170,7 +170,10 @@ void dinput_mouse_rawinput_hook( IDirectInputDevice8W *iface, WPARAM wparam, LPA
     if (ri->data.mouse.usButtonFlags & RI_MOUSE_WHEEL)
     {
         state->lZ += (SHORT)ri->data.mouse.usButtonData;
-        queue_event( iface, 2, (SHORT)ri->data.mouse.usButtonData, GetCurrentTime(), seq );
+        if (impl->base.user_format.dwFlags & DIDF_ABSAXIS)
+            queue_event( iface, 2, state->lZ, GetCurrentTime(), seq );
+        else
+            queue_event( iface, 2, (SHORT)ri->data.mouse.usButtonData, GetCurrentTime(), seq );
         notify = TRUE;
     }
 
@@ -243,7 +246,10 @@ int dinput_mouse_hook( IDirectInputDevice8W *iface, WPARAM wparam, LPARAM lparam
         }
         case WM_MOUSEWHEEL:
             state->lZ += (short)HIWORD( hook->mouseData );
-            queue_event( iface, 2, (short)HIWORD( hook->mouseData ), GetCurrentTime(), seq );
+            if (impl->base.user_format.dwFlags & DIDF_ABSAXIS)
+                queue_event( iface, 2, state->lZ, GetCurrentTime(), seq );
+            else
+                queue_event( iface, 2, (short)HIWORD( hook->mouseData ), GetCurrentTime(), seq );
             /* FarCry crashes if it gets a mouse wheel message */
             /* FIXME: should probably filter out other messages too */
             ret = impl->clipped;

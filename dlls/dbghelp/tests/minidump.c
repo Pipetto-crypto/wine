@@ -29,16 +29,16 @@
 static HRESULT (WINAPI *pSetThreadDescription)(HANDLE,PCWSTR);
 static const WCHAR *main_thread_name = L"I'm the running thread!";
 
-static unsigned popcount32(ULONG val)
+static unsigned popcount64(ULONG64 val)
 {
-    val -= val >> 1 & 0x55555555;
-    val = (val & 0x33333333) + (val >> 2 & 0x33333333);
-    return ((val + (val >> 4)) & 0x0f0f0f0f) * 0x01010101 >> 24;
-}
+    unsigned count = 0;
 
-static inline unsigned popcount64(ULONG64 val)
-{
-    return popcount32(val >> 32) + popcount32(val);
+    while (val)
+    {
+        val &= val - 1;
+        ++count;
+    }
+    return count;
 }
 
 #define minidump_open_for_read(a) _minidump_open_for_read(__LINE__, (a))
@@ -213,6 +213,7 @@ static void minidump_check_threads(void *data)
     {
         const MINIDUMP_THREAD *thread = &thread_list->Threads[i];
         const CONTEXT *ctx;
+        ULONG64 sp = 0;
 
         ok(thread->SuspendCount == 0, "Unexpected value\n");
         ok(thread->Stack.StartOfMemoryRange, "Unexpected value %I64x\n", thread->Stack.StartOfMemoryRange);
@@ -221,6 +222,19 @@ static void minidump_check_threads(void *data)
         ok(thread->ThreadContext.DataSize >= sizeof(CONTEXT), "Unexpected value\n");
         ctx = RVA_TO_ADDR(data, thread->ThreadContext.Rva);
         ok((ctx->ContextFlags & CONTEXT_ALL) == CONTEXT_ALL, "Unexpected value\n");
+#if defined(__i386__)
+        sp = ctx->Esp;
+#elif defined(__x86_64__)
+        sp = ctx->Rsp;
+#elif defined(__arm__) || defined(__aarch64__)
+        sp = ctx->Sp;
+#else
+#error unsupported architecture
+#endif
+        ok(thread->Stack.StartOfMemoryRange <= sp &&
+           sp < thread->Stack.StartOfMemoryRange + thread->Stack.Memory.DataSize,
+           "Unexpected stack pointer %I64x (%I64x + %x)\n",
+           sp, thread->Stack.StartOfMemoryRange, thread->Stack.Memory.DataSize);
     }
 }
 
@@ -545,6 +559,7 @@ static void test_current_process(void)
 struct cb_info
 {
     /* input */
+    DWORD tid;
     unsigned module_flags;
     unsigned thread_flags;
     /* output */
@@ -559,6 +574,7 @@ static BOOL CALLBACK test_callback_cb(void *pmt, MINIDUMP_CALLBACK_INPUT *input,
 {
     struct cb_info *cb = pmt;
 
+    ok(GetCurrentThreadId() == cb->tid, "Unexpected tid %lu != %lu\n", GetCurrentThreadId(), cb->tid);
     ok(input->CallbackType < sizeof(cb->mask_types) * 8, "Too small mask\n");
     cb->mask_types |= (DWORD64)1u << input->CallbackType;
 
@@ -692,6 +708,7 @@ static void test_callback(void)
         winetest_push_context("callback_tests[%d]", i);
 
         memset(&cb_info, 0, sizeof(cb_info));
+        cb_info.tid = GetCurrentThreadId();
         cb_info.module_flags = callback_tests[i].module_flags;
         cb_info.thread_flags = callback_tests[i].thread_flags;
         minidump_write(GetCurrentProcess(), L"foo.mdmp", callback_tests[i].dump_type, FALSE, NULL, &cbi);

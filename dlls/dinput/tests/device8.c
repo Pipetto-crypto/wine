@@ -134,7 +134,39 @@ static HRESULT create_dinput_device( DWORD version, const GUID *guid, IDirectInp
     ref = IDirectInput_Release( dinput );
     ok( ref == 0, "Release returned %ld\n", ref );
 
-    return DI_OK;
+    return hr;
+}
+
+static void test_sys_device_exclusive_background( DWORD version, const GUID *guid, HWND hwnd, BOOL keyboard )
+{
+    IDirectInputDevice8W *device;
+    HRESULT hr;
+
+    if (FAILED(create_dinput_device( version, guid, &device ))) return;
+
+    hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_EXCLUSIVE | DISCL_BACKGROUND );
+    if (keyboard)
+    {
+        todo_wine_if( version == 0x500 )
+        ok( hr == (version == 0x500 ? DIERR_INVALIDPARAM : DIERR_UNSUPPORTED),
+            "SetCooperativeLevel for %s returned %#lx\n", debugstr_guid( guid ), hr );
+    }
+    else ok( hr == DIERR_UNSUPPORTED, "SetCooperativeLevel for %s returned %#lx\n", debugstr_guid( guid ), hr );
+
+    hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_EXCLUSIVE | DISCL_FOREGROUND );
+    if (keyboard && version == 0x500)
+    {
+        todo_wine
+        ok( hr == DIERR_INVALIDPARAM, "Foreground exclusive SetCooperativeLevel for %s returned %#lx\n",
+            debugstr_guid( guid ), hr );
+    }
+    else ok( hr == DI_OK, "Foreground exclusive SetCooperativeLevel for %s returned %#lx\n",
+             debugstr_guid( guid ), hr );
+
+    hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_NONEXCLUSIVE | DISCL_BACKGROUND );
+    ok( hr == DI_OK, "Background nonexclusive SetCooperativeLevel for %s returned %#lx\n",
+        debugstr_guid( guid ), hr );
+    IDirectInputDevice8_Release( device );
 }
 
 static HKL activate_keyboard_layout( LANGID langid, HKL *old_hkl )
@@ -1191,6 +1223,7 @@ static void test_sys_mouse( DWORD version )
     DIDEVCAPS caps = {0};
     DIMOUSESTATE state;
     ULONG res, ref;
+    LONG wheel_pos;
     HANDLE event;
     DWORD count;
     HRESULT hr;
@@ -1466,6 +1499,9 @@ static void test_sys_mouse( DWORD version )
 
     hwnd = create_foreground_window( TRUE );
 
+    test_sys_device_exclusive_background( version, &GUID_SysMouseEm, hwnd, FALSE );
+    test_sys_device_exclusive_background( version, &GUID_SysMouseEm2, hwnd, FALSE );
+
     hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_FOREGROUND );
     ok( hr == DIERR_INVALIDPARAM, "SetCooperativeLevel returned %#lx\n", hr );
     hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_FOREGROUND|DISCL_EXCLUSIVE );
@@ -1618,6 +1654,116 @@ static void test_sys_mouse( DWORD version )
         hr = IDirectInputDevice8_Unacquire( device );
         ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
     }
+
+    /* Wheel mouse in relative mode */
+    hr = IDirectInputDevice8_Acquire( device );
+    ok( hr == DI_OK, "Acquire returned %#lx, skipping test_sys_mouse\n", hr );
+    if (hr != DI_OK) goto cleanup;
+
+    mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+    res = WaitForSingleObject( event, 100 );
+    if (res == WAIT_TIMEOUT) /* Acquire is asynchronous */
+    {
+        mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+        res = WaitForSingleObject( event, 5000 );
+    }
+    ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+    count = INFINITE;
+    hr = IDirectInputDevice8_GetDeviceData( device, sizeof(objdata), NULL, &count, 0 );
+    ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+
+    res = ResetEvent( event );
+    ok( res, "ResetEvent failed, error %lu\n", GetLastError() );
+
+    for (i = -3; i < 3; i++)
+    {
+        int j;
+        int obj_size = version < 0x800 ? sizeof(DIDEVICEOBJECTDATA_DX3) : sizeof(objdata);
+        int delta = i >= 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+
+        mouse_event( MOUSEEVENTF_WHEEL, 0, 0, delta, 0 );
+        res = WaitForSingleObject( event, 100 );
+        todo_wine_if( version < 0x800 && res)
+        ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+        for (j = 0; j < 100; j++)
+        {
+            count = 1;
+            hr = IDirectInputDevice8_GetDeviceData( device, obj_size, &objdata, &count, 0 );
+            ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+            ok( count == 1, "got count %lu\n", count );
+            if (hr == DI_OK && count == 1 && objdata.dwOfs == DIMOFS_Z) break;
+        }
+
+        ok( hr == DI_OK, "GetDeviceData returned %#lx\n", hr );
+        ok( count == 1, "got count %lu\n", count );
+        ok( objdata.dwOfs == DIMOFS_Z, "got objdata.dwOfs = %lu\n", objdata.dwOfs);
+        ok( objdata.dwData == delta, "got objdata.dwData = %lu\n", objdata.dwData);
+    }
+
+    hr = IDirectInputDevice8_Unacquire( device );
+    ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
+
+    /* Wheel mouse in absolute mode */
+    prop_dword.dwData = DIPROPAXISMODE_ABS;
+    hr = IDirectInputDevice8_SetProperty(device, DIPROP_AXISMODE, &prop_dword.diph);
+    ok( hr == DI_OK, "SetProperty returned %#lx\n", hr );
+
+    hr = IDirectInputDevice8_Acquire( device );
+    ok( hr == DI_OK, "Acquire returned %#lx, skipping test_sys_mouse\n", hr );
+    if (hr != DI_OK) goto cleanup;
+
+    mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+    res = WaitForSingleObject( event, 100 );
+    if (res == WAIT_TIMEOUT) /* Acquire is asynchronous */
+    {
+        mouse_event( MOUSEEVENTF_MOVE, 10, 10, 0, 0 );
+        res = WaitForSingleObject( event, 5000 );
+    }
+    ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+    hr = IDirectInputDevice8_GetDeviceState(device, sizeof(state), &state);
+    ok( hr == DI_OK, "GetDeviceState  returned %#lx\n", hr );
+    wheel_pos = state.lZ;
+
+    count = INFINITE;
+    hr = IDirectInputDevice8_GetDeviceData( device, sizeof(objdata), NULL, &count, 0 );
+    ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+
+    res = ResetEvent( event );
+    ok( res, "ResetEvent failed, error %lu\n", GetLastError() );
+
+    for (i = -3; i < 3; i++)
+    {
+        int j;
+        int obj_size = version < 0x800 ? sizeof(DIDEVICEOBJECTDATA_DX3) : sizeof(objdata);
+        int delta = i >= 0 ? -WHEEL_DELTA : WHEEL_DELTA;
+        wheel_pos += delta;
+
+        mouse_event( MOUSEEVENTF_WHEEL, 0, 0, delta, 0 );
+        res = WaitForSingleObject( event, 100 );
+        todo_wine_if( version < 0x800 && res)
+        ok( !res, "WaitForSingleObject returned %#lx\n", res );
+
+        for (j = 0; j < 100; j++)
+        {
+            count = 1;
+            hr = IDirectInputDevice8_GetDeviceData( device, obj_size, &objdata, &count, 0 );
+            ok( hr == DI_OK || hr == DI_BUFFEROVERFLOW, "GetDeviceData returned %#lx\n", hr );
+            ok( count == 1, "got count %lu\n", count );
+            if (hr == DI_OK && count == 1 && objdata.dwOfs == DIMOFS_Z) break;
+        }
+
+        ok( hr == DI_OK, "GetDeviceData returned %#lx\n", hr );
+        ok( count == 1, "got count %lu\n", count );
+        ok( objdata.dwOfs == DIMOFS_Z, "got objdata.dwOfs = %lu\n", objdata.dwOfs);
+        ok( objdata.dwData == wheel_pos, "got objdata.dwData = %lu, wheel_pos = %ld\n", objdata.dwData, wheel_pos);
+    }
+
+    hr = IDirectInputDevice8_Unacquire( device );
+    ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
+
 
     tmp_hwnd = create_foreground_window( FALSE );
 
@@ -3299,6 +3445,9 @@ static void test_sys_keyboard( DWORD version )
 
 
     hwnd = create_foreground_window( FALSE );
+
+    test_sys_device_exclusive_background( version, &GUID_SysKeyboardEm, hwnd, TRUE );
+    test_sys_device_exclusive_background( version, &GUID_SysKeyboardEm2, hwnd, TRUE );
 
     hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_FOREGROUND );
     ok( hr == DIERR_INVALIDPARAM, "SetCooperativeLevel returned %#lx\n", hr );

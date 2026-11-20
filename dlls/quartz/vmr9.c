@@ -217,6 +217,45 @@ static void copy_plane(BYTE **dstp, unsigned int dst_pitch, unsigned int dst_hei
     *dstp += dst_pitch * dst_height;
 }
 
+#define CLAMP(x) ((x) > 255 ? 255 : (x) < 0 ? 0 : (x))
+
+static void convert_yv12_to_rgb(BYTE *dst, LONG dst_pitch, const BYTE *src, unsigned int src_pitch,
+        unsigned int width, int height)
+{
+    const BYTE *y_plane = src;
+    const BYTE *v_plane, *u_plane;
+    unsigned int chroma_pitch = src_pitch / 2;
+    unsigned int x, y;
+
+    if (!height || !width)
+        return;
+
+    v_plane = y_plane + src_pitch * height;
+    u_plane = v_plane + chroma_pitch * (height / 2);
+
+    for (y = 0; y < height; ++y)
+    {
+        BYTE *dst_row = dst + y * dst_pitch;
+        const BYTE *y_row = y_plane + y * src_pitch;
+        const BYTE *v_row = v_plane + (y / 2) * chroma_pitch;
+        const BYTE *u_row = u_plane + (y / 2) * chroma_pitch;
+
+        for (x = 0; x < width; ++x)
+        {
+            int C = y_row[x] - 16;
+            int D = v_row[x / 2] - 128;
+            int E = u_row[x / 2] - 128;
+            int R = (298 * C + 409 * E + 128) >> 8;
+            int G = (298 * C - 100 * D - 208 * E + 128) >> 8;
+            int B = (298 * C + 516 * D + 128) >> 8;
+
+            dst_row[x * 3 + 0] = CLAMP(R);
+            dst_row[x * 3 + 1] = CLAMP(G);
+            dst_row[x * 3 + 2] = CLAMP(B);
+        }
+    }
+}
+
 static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
 {
     struct quartz_vmr *filter = impl_from_IBaseFilter(&iface->filter.IBaseFilter_iface);
@@ -306,9 +345,19 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
         BYTE *dst = locked_rect.pBits;
         const BYTE *src = data;
 
-        copy_plane(&dst, locked_rect.Pitch, dst_desc.Height, &src, src_pitch, height);
-        copy_plane(&dst, locked_rect.Pitch / 2, dst_desc.Height / 2, &src, src_pitch / 2, height / 2);
-        copy_plane(&dst, locked_rect.Pitch / 2, dst_desc.Height / 2, &src, src_pitch / 2, height / 2);
+        if (dst_desc.Format == MAKEFOURCC('Y','V','1','2'))
+        {
+            copy_plane(&dst, locked_rect.Pitch, dst_desc.Height, &src, src_pitch, height);
+            copy_plane(&dst, locked_rect.Pitch / 2, dst_desc.Height / 2, &src, src_pitch / 2, height / 2);
+            copy_plane(&dst, locked_rect.Pitch / 2, dst_desc.Height / 2, &src, src_pitch / 2, height / 2);
+        }
+        else if (dst_desc.Format == D3DFMT_R8G8B8)
+        {
+            convert_yv12_to_rgb(locked_rect.pBits, locked_rect.Pitch, data, src_pitch,
+                    width, abs(height));
+        }
+        else
+            ERR("Unsupported destination format %d\n", dst_desc.Format);
     }
     else if (height > 0 && bitmap_header->biCompression == BI_RGB)
     {

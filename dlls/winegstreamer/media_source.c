@@ -607,7 +607,11 @@ static HRESULT media_source_start(struct media_source *source, IMFPresentationDe
         return E_OUTOFMEMORY;
 
     if (FAILED(hr = IMFPresentationDescriptor_GetStreamDescriptorCount(descriptor, &count)))
+    {
         WARN("Failed to get presentation descriptor stream count, hr %#lx\n", hr);
+        free(descriptors);
+        return hr;
+    }
 
     for (i = 0; i < count; i++)
     {
@@ -1673,7 +1677,7 @@ static HRESULT media_source_create(struct object_context *context, IMFMediaSourc
     if (FAILED(hr = MFAllocateWorkQueue(&object->async_commands_queue)))
         goto fail;
 
-    if (!(parser = wg_parser_create(FALSE, FALSE)))
+    if (!(parser = wg_parser_create(WG_PARSER_CREATE_FLAG_NONE)))
     {
         hr = E_OUTOFMEMORY;
         goto fail;

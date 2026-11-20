@@ -1946,6 +1946,11 @@ NTSTATUS WINAPI NtSetInformationProcess( HANDLE handle, PROCESSINFOCLASS class, 
 #endif
     }
 
+    case ProcessWineUnixPidLegacy:
+        if (size != sizeof(int)) ret = STATUS_INFO_LENGTH_MISMATCH;
+        else ret = get_unix_pid( handle, (int *)info );
+        break;
+
     case ProcessWineMakeProcessSystem:
         if (size != sizeof(HANDLE *)) return STATUS_INFO_LENGTH_MISMATCH;
         SERVER_START_REQ( make_process_system )

@@ -70,6 +70,12 @@ static const struct subtype_info subtype_info_list[] =
 
 static const GUID *const video_decoder_output_types[] =
 {
+    /* RGB32 is listed first so that the pipeline picks it. Letting the
+     * video reach the renderer as YUV means the conversion happens there,
+     * with a matrix and a range that are hardcoded and know nothing about
+     * the actual stream, which shifts colours. Converting in gstreamer
+     * keeps the colours of the source. */
+    &MFVideoFormat_RGB32,
     &MFVideoFormat_NV12,
     &MFVideoFormat_YV12,
     &MFVideoFormat_IYUV,
@@ -1199,7 +1205,11 @@ static HRESULT WINAPI media_object_GetOutputType(IMediaObject *iface, DWORD inde
     type->lSampleSize = image_size;
     type->formattype = FORMAT_VideoInfo;
     type->cbFormat = sizeof(VIDEOINFOHEADER);
-    type->pbFormat = CoTaskMemAlloc(type->cbFormat);
+    if (!(type->pbFormat = CoTaskMemAlloc(type->cbFormat)))
+    {
+        IMFMediaType_Release(media_type);
+        return E_OUTOFMEMORY;
+    }
     memset(type->pbFormat, 0, type->cbFormat);
 
     info = (VIDEOINFOHEADER *)type->pbFormat;
@@ -1506,7 +1516,10 @@ static HRESULT WINAPI media_object_ProcessOutput(IMediaObject *iface, DWORD flag
     if (SUCCEEDED(hr))
         wg_sample_queue_flush(decoder->wg_sample_queue, false);
     else if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
+    {
+        buffers[0].dwStatus = 0;
         hr = S_FALSE;
+    }
 
     if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
         return S_FALSE;

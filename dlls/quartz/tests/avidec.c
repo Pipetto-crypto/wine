@@ -54,6 +54,7 @@ static ULONG get_refcount(void *iface)
 }
 
 static BITMAPINFOHEADER sink_bitmap_info, source_bitmap_info;
+static BOOL _use_rgb24 = FALSE;
 
 static LRESULT CALLBACK vfw_driver_proc(DWORD_PTR id, HDRVR driver, UINT msg,
         LPARAM lparam1, LPARAM lparam2)
@@ -85,11 +86,21 @@ static LRESULT CALLBACK vfw_driver_proc(DWORD_PTR id, HDRVR driver, UINT msg,
         ok(!memcmp(in, &sink_bitmap_info, sizeof(BITMAPINFOHEADER)), "Input types didn't match.\n");
 
         out->biSize = sizeof(BITMAPINFOHEADER);
-        out->biCompression = mmioFOURCC('I','4','2','0');
         out->biWidth = 29;
         out->biHeight = 24;
-        out->biBitCount = 12;
-        out->biSizeImage = 24 * (((29 * 12 + 31) / 8) & ~3);
+
+        if (_use_rgb24)
+        {
+            out->biCompression = BI_RGB;
+            out->biBitCount = 24;
+        }
+        else
+        {
+            out->biCompression = mmioFOURCC('I','4','2','0');
+            out->biBitCount = 12;
+        }
+
+        out->biSizeImage = out->biHeight * (((out->biWidth * out->biBitCount + 31) / 8) & ~3);
 
         return ICERR_OK;
     }
@@ -102,7 +113,8 @@ static LRESULT CALLBACK vfw_driver_proc(DWORD_PTR id, HDRVR driver, UINT msg,
         if (in->biCompression != test_handler || in->biBitCount != 16)
             return ICERR_BADFORMAT;
 
-        if (out && out->biCompression != mmioFOURCC('I','4','2','0'))
+        if (out && ((!_use_rgb24 && out->biCompression != mmioFOURCC('I','4','2','0'))
+                || (_use_rgb24 && (out->biCompression != BI_RGB || out->biBitCount != 24))))
             return ICERR_BADFORMAT;
 
         return ICERR_OK;
@@ -1862,6 +1874,138 @@ static void test_streaming_events(IMediaControl *control, IPin *sink,
     IMemAllocator_Release(allocator);
 }
 
+struct short_type
+{
+    const GUID *subtype;
+    DWORD compression;
+    WORD bpp;
+};
+
+static void test_source_media_types(IPin *source, AM_MEDIA_TYPE *source_mt, BOOL use_rgb24)
+{
+    IEnumMediaTypes *enummt;
+    AM_MEDIA_TYPE *pmt;
+    unsigned int i;
+    HRESULT hr;
+
+    winetest_push_context("%s", use_rgb24 ? "rgb24" : "i420");
+
+    _use_rgb24 = use_rgb24;
+
+    hr = IPin_EnumMediaTypes(source, &enummt);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    for (i = 0; i < 9; ++i)
+    {
+        static const struct short_type expect_table[9] =
+        {
+            {&MEDIASUBTYPE_CLJR, mmioFOURCC('C','L','J','R'), 8},
+            {&MEDIASUBTYPE_UYVY, mmioFOURCC('U','Y','V','Y'), 16},
+            {&MEDIASUBTYPE_YUY2, mmioFOURCC('Y','U','Y','2'), 16},
+            {&MEDIASUBTYPE_RGB32, BI_RGB, 32},
+            {&MEDIASUBTYPE_RGB24, BI_RGB, 24},
+            {&MEDIASUBTYPE_RGB565, BI_BITFIELDS, 16},
+            {&MEDIASUBTYPE_RGB555, BI_RGB, 16},
+            {&MEDIASUBTYPE_RGB8, BI_RGB, 8},
+            {&MEDIASUBTYPE_I420, mmioFOURCC('I','4','2','0'), 12},
+        };
+
+        const struct short_type *expect = (use_rgb24 && i == 8) ? expect_table + 4 : expect_table + i;
+
+        VIDEOINFOHEADER expect_format =
+        {
+            .bmiHeader.biSize = sizeof(BITMAPINFOHEADER),
+            .bmiHeader.biWidth = 29,
+            .bmiHeader.biHeight = 24,
+            .bmiHeader.biBitCount = expect->bpp,
+            .bmiHeader.biCompression = expect->compression,
+            .bmiHeader.biSizeImage = 24 * (((29 * expect->bpp + 31) / 8) & ~3),
+        };
+
+        AM_MEDIA_TYPE expect_mt =
+        {
+            .majortype = MEDIATYPE_Video,
+            .subtype = *expect->subtype,
+            .bFixedSizeSamples = TRUE,
+            .lSampleSize = 24 * (((29 * expect->bpp + 31) / 8) & ~3),
+            .formattype = FORMAT_VideoInfo,
+            .cbFormat = sizeof(VIDEOINFOHEADER),
+            .pbFormat = (BYTE *)&expect_format,
+        };
+
+        hr = IEnumMediaTypes_Next(enummt, 1, &pmt, NULL);
+        ok(hr == S_OK, "Got hr %#lx.\n", hr);
+        ok(!memcmp(pmt, &expect_mt, offsetof(AM_MEDIA_TYPE, cbFormat)),
+                "%u: Media types didn't match.\n", i);
+        ok(!memcmp(pmt->pbFormat, &expect_format, sizeof(VIDEOINFOHEADER)),
+                "%u: Format blocks didn't match.\n", i);
+        if (i == 5)
+        {
+            const VIDEOINFO *format = (VIDEOINFO *)pmt->pbFormat;
+
+            ok(pmt->cbFormat == offsetof(VIDEOINFO, dwBitMasks[3]), "Got format size %lu.\n", pmt->cbFormat);
+            ok(format->dwBitMasks[iRED] == 0xf800, "Got red bit mask %#lx.\n", format->dwBitMasks[iRED]);
+            ok(format->dwBitMasks[iGREEN] == 0x07e0, "Got green bit mask %#lx.\n", format->dwBitMasks[iGREEN]);
+            ok(format->dwBitMasks[iBLUE] == 0x001f, "Got blue bit mask %#lx.\n", format->dwBitMasks[iBLUE]);
+        }
+
+        hr = IPin_QueryAccept(source, pmt);
+        ok(hr == (i == 8 || (use_rgb24 && i == 4) ? S_OK : S_FALSE), "Got hr %#lx.\n", hr);
+
+        if (i == 8 && source_mt)
+            CopyMediaType(source_mt, pmt);
+
+        DeleteMediaType(pmt);
+    }
+
+    hr = IEnumMediaTypes_Next(enummt, 1, &pmt, NULL);
+    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
+
+    IEnumMediaTypes_Release(enummt);
+
+    _use_rgb24 = FALSE;
+
+    winetest_pop_context();
+}
+
+static void test_top_down_rects(IPin *source)
+{
+    VIDEOINFOHEADER format =
+    {
+        .bmiHeader.biSize = sizeof(BITMAPINFOHEADER),
+        .bmiHeader.biWidth = 29,
+        .bmiHeader.biHeight = -24,
+        .bmiHeader.biPlanes = 1,
+        .bmiHeader.biBitCount = 24,
+        .bmiHeader.biCompression = BI_RGB,
+        .bmiHeader.biSizeImage = 88 * 24,
+    };
+    AM_MEDIA_TYPE mt =
+    {
+        .majortype = MEDIATYPE_Video,
+        .subtype = MEDIASUBTYPE_RGB24,
+        .bFixedSizeSamples = TRUE,
+        .lSampleSize = format.bmiHeader.biSizeImage,
+        .formattype = FORMAT_VideoInfo,
+        .cbFormat = sizeof(format),
+        .pbFormat = (BYTE *)&format,
+    };
+    BOOL use_rgb24 = _use_rgb24;
+    HRESULT hr;
+
+    /* A full-frame rectangle still uses ICM_DECOMPRESS_QUERY for top-down RGB. */
+    _use_rgb24 = TRUE;
+    SetRect(&format.rcSource, 0, 0, 29, 24);
+    hr = IPin_QueryAccept(source, &mt);
+    ok(hr == S_OK, "Got hr %#lx for a full source rectangle.\n", hr);
+
+    SetRectEmpty(&format.rcSource);
+    SetRect(&format.rcTarget, 0, 0, 29, 24);
+    hr = IPin_QueryAccept(source, &mt);
+    ok(hr == S_OK, "Got hr %#lx for a full target rectangle.\n", hr);
+    _use_rgb24 = use_rgb24;
+}
+
 static void test_connect_pin(void)
 {
     VIDEOINFOHEADER req_format =
@@ -1883,14 +2027,12 @@ static void test_connect_pin(void)
     };
     struct testfilter testsource, testsink;
     IBaseFilter *filter = create_avi_dec();
-    AM_MEDIA_TYPE mt, source_mt, *pmt;
+    AM_MEDIA_TYPE mt, source_mt;
     IPin *sink, *source, *peer;
     VIDEOINFOHEADER *format;
-    IEnumMediaTypes *enummt;
     IMediaControl *control;
     IMemInputPin *meminput;
     IFilterGraph2 *graph;
-    unsigned int i;
     HRESULT hr;
     ULONG ref;
 
@@ -1953,80 +2095,9 @@ static void test_connect_pin(void)
 
     sink_bitmap_info = req_format.bmiHeader;
 
-    hr = IPin_EnumMediaTypes(source, &enummt);
-    ok(hr == S_OK, "Got hr %#lx.\n", hr);
-
-    for (i = 0; i < 9; ++i)
-    {
-        static const struct
-        {
-            const GUID *subtype;
-            DWORD compression;
-            WORD bpp;
-        }
-        expect[9] =
-        {
-            {&MEDIASUBTYPE_CLJR, mmioFOURCC('C','L','J','R'), 8},
-            {&MEDIASUBTYPE_UYVY, mmioFOURCC('U','Y','V','Y'), 16},
-            {&MEDIASUBTYPE_YUY2, mmioFOURCC('Y','U','Y','2'), 16},
-            {&MEDIASUBTYPE_RGB32, BI_RGB, 32},
-            {&MEDIASUBTYPE_RGB24, BI_RGB, 24},
-            {&MEDIASUBTYPE_RGB565, BI_BITFIELDS, 16},
-            {&MEDIASUBTYPE_RGB555, BI_RGB, 16},
-            {&MEDIASUBTYPE_RGB8, BI_RGB, 8},
-            {&MEDIASUBTYPE_I420, mmioFOURCC('I','4','2','0'), 12},
-        };
-
-        VIDEOINFOHEADER expect_format =
-        {
-            .bmiHeader.biSize = sizeof(BITMAPINFOHEADER),
-            .bmiHeader.biWidth = 29,
-            .bmiHeader.biHeight = 24,
-            .bmiHeader.biBitCount = expect[i].bpp,
-            .bmiHeader.biCompression = expect[i].compression,
-            .bmiHeader.biSizeImage = 24 * (((29 * expect[i].bpp + 31) / 8) & ~3),
-        };
-
-        AM_MEDIA_TYPE expect_mt =
-        {
-            .majortype = MEDIATYPE_Video,
-            .subtype = *expect[i].subtype,
-            .bFixedSizeSamples = TRUE,
-            .lSampleSize = 24 * (((29 * expect[i].bpp + 31) / 8) & ~3),
-            .formattype = FORMAT_VideoInfo,
-            .cbFormat = sizeof(VIDEOINFOHEADER),
-            .pbFormat = (BYTE *)&expect_format,
-        };
-
-        hr = IEnumMediaTypes_Next(enummt, 1, &pmt, NULL);
-        ok(hr == S_OK, "Got hr %#lx.\n", hr);
-        ok(!memcmp(pmt, &expect_mt, offsetof(AM_MEDIA_TYPE, cbFormat)),
-                "%u: Media types didn't match.\n", i);
-        ok(!memcmp(pmt->pbFormat, &expect_format, sizeof(VIDEOINFOHEADER)),
-                "%u: Format blocks didn't match.\n", i);
-        if (i == 5)
-        {
-            const VIDEOINFO *format = (VIDEOINFO *)pmt->pbFormat;
-
-            ok(pmt->cbFormat == offsetof(VIDEOINFO, dwBitMasks[3]), "Got format size %lu.\n", pmt->cbFormat);
-            ok(format->dwBitMasks[iRED] == 0xf800, "Got red bit mask %#lx.\n", format->dwBitMasks[iRED]);
-            ok(format->dwBitMasks[iGREEN] == 0x07e0, "Got green bit mask %#lx.\n", format->dwBitMasks[iGREEN]);
-            ok(format->dwBitMasks[iBLUE] == 0x001f, "Got blue bit mask %#lx.\n", format->dwBitMasks[iBLUE]);
-        }
-
-        hr = IPin_QueryAccept(source, pmt);
-        ok(hr == (i == 8 ? S_OK : S_FALSE), "Got hr %#lx.\n", hr);
-
-        if (i == 8)
-            CopyMediaType(&source_mt, pmt);
-
-        DeleteMediaType(pmt);
-    }
-
-    hr = IEnumMediaTypes_Next(enummt, 1, &pmt, NULL);
-    ok(hr == S_FALSE, "Got hr %#lx.\n", hr);
-
-    IEnumMediaTypes_Release(enummt);
+    test_source_media_types(source, &source_mt, FALSE);
+    test_source_media_types(source, NULL, TRUE);
+    test_top_down_rects(source);
 
     test_sink_allocator(meminput);
 

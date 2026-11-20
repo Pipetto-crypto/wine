@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #ifdef HAVE_SYS_UN_H
 #include <sys/un.h>
@@ -219,6 +220,7 @@ static struct glx_pixel_format *pixel_formats;
 static int nb_pixel_formats, nb_onscreen_formats;
 static const struct egl_platform *egl;
 static EGLContext egl_fallback_context;
+static pthread_mutex_t egl_fallback_mutex = PTHREAD_MUTEX_INITIALIZER;
 static BOOL (*p_egl_describe_pixel_format)( int format, struct wgl_pixel_format *pf );
 
 /* Selects the preferred GLX swap control method for use by wglSwapIntervalEXT */
@@ -538,10 +540,11 @@ static BOOL x11drv_egl_surface_create( HWND hwnd, BOOL raw, int format, struct o
     gl = opengl_drawable_create( sizeof(*gl), &x11drv_egl_surface_funcs, format, client );
     client_surface_release( client );
     if (!gl) return FALSE;
-    gl->base.buffer_map[0] = GL_BACK_LEFT;
-    gl->base.buffer_map[1] = GL_BACK_RIGHT;
-    gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_BACK;
-    gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_BACK;
+
+    opengl_drawable_map_buffer( &gl->base, GL_FRONT_LEFT, GL_BACK_LEFT );
+    opengl_drawable_map_buffer( &gl->base, GL_FRONT, GL_BACK );
+    opengl_drawable_map_buffer( &gl->base, GL_FRONT_AND_BACK, GL_BACK );
+    if (gl->base.stereo) opengl_drawable_map_buffer( &gl->base, GL_FRONT_RIGHT, GL_BACK_RIGHT );
 
     if (!(gl->base.surface = funcs->p_eglCreateWindowSurface( egl->display, egl_config_for_format( format ),
                                                               (void *)window, NULL )))
@@ -1530,12 +1533,23 @@ static BOOL x11drv_egl_surface_swap( struct opengl_drawable *base )
     if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ) && funcs->p_eglGetError() == EGL_BAD_SURFACE
         && !funcs->p_eglGetCurrentContext())
     {
+        /* A context cannot be current on multiple threads at once. */
+        pthread_mutex_lock( &egl_fallback_mutex );
         if (!egl_fallback_context)
             egl_fallback_context = funcs->p_eglCreateContext( egl->display, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, NULL );
 
-        funcs->p_eglMakeCurrent( egl->display, gl->base.surface, gl->base.surface, egl_fallback_context );
-        funcs->p_eglSwapBuffers( egl->display, gl->base.surface );
-        funcs->p_eglMakeCurrent( egl->display, EGL_NO_CONTEXT, EGL_NO_SURFACE, EGL_NO_CONTEXT );
+        if (!egl_fallback_context)
+            WARN( "Failed to create fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        else if (!funcs->p_eglMakeCurrent( egl->display, gl->base.surface, gl->base.surface, egl_fallback_context ))
+            WARN( "Failed to bind fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        else
+        {
+            if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ))
+                WARN( "Failed to swap with fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+            if (!funcs->p_eglMakeCurrent( egl->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT ))
+                WARN( "Failed to unbind fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        }
+        pthread_mutex_unlock( &egl_fallback_mutex );
     }
 
     if (InterlockedCompareExchange( &base->client->offscreen, 0, 0 ))

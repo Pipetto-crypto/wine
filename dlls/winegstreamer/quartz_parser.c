@@ -751,8 +751,10 @@ static bool amt_from_wg_format_video_mpeg1(AM_MEDIA_TYPE *mt, const struct wg_fo
 {
     MPEG1VIDEOINFO *video_format;
     uint32_t frame_time;
+    DWORD size;
 
-    if (!(video_format = CoTaskMemAlloc(sizeof(*video_format))))
+    size = offsetof(MPEG1VIDEOINFO, bSequenceHeader) + format->u.video.codec_data_len;
+    if (!(video_format = CoTaskMemAlloc(size)))
         return false;
 
     mt->majortype = MEDIATYPE_Video;
@@ -760,10 +762,10 @@ static bool amt_from_wg_format_video_mpeg1(AM_MEDIA_TYPE *mt, const struct wg_fo
     mt->bTemporalCompression = TRUE;
     mt->lSampleSize = 1;
     mt->formattype = FORMAT_MPEGVideo;
-    mt->cbFormat = sizeof(MPEG1VIDEOINFO);
+    mt->cbFormat = size;
     mt->pbFormat = (BYTE *)video_format;
 
-    memset(video_format, 0, sizeof(*video_format));
+    memset(video_format, 0, size);
     if ((frame_time = MulDiv(10000000, format->u.video.fps_d, format->u.video.fps_n)) != -1)
         video_format->hdr.AvgTimePerFrame = frame_time;
     video_format->hdr.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -773,6 +775,30 @@ static bool amt_from_wg_format_video_mpeg1(AM_MEDIA_TYPE *mt, const struct wg_fo
     video_format->hdr.bmiHeader.biBitCount = 12;
     video_format->hdr.bmiHeader.biCompression = mt->subtype.Data1;
     video_format->hdr.bmiHeader.biSizeImage = wg_format_get_max_size(format);
+
+    /* Ignore additional start code units after the sequence header. */
+    size = 12; /* minimum sequence header length */
+    if (format->u.video.codec_data_len >= size
+            && format->u.video.codec_data[0] == 0x00
+            && format->u.video.codec_data[1] == 0x00
+            && format->u.video.codec_data[2] == 0x01
+            && format->u.video.codec_data[3] == 0xb3)
+    {
+        /* has intra quantiser matrix? */
+        if (format->u.video.codec_data[size-1] & 2)
+            size += 64;
+
+        /* has non-intra quantiser matrix? */
+        if (format->u.video.codec_data_len >= size
+                && (format->u.video.codec_data[size-1] & 1))
+            size += 64;
+
+        if (format->u.video.codec_data_len >= size)
+        {
+            video_format->cbSequenceHeader = size;
+            memcpy(video_format->bSequenceHeader, format->u.video.codec_data, size);
+        }
+    }
 
     return true;
 }
@@ -1080,7 +1106,7 @@ static bool amt_to_wg_format_video_indeo(const AM_MEDIA_TYPE *mt, struct wg_form
         return false;
     }
 
-    format->major_type = WG_MAJOR_TYPE_VIDEO_CINEPAK;
+    format->major_type = WG_MAJOR_TYPE_VIDEO_INDEO;
     if (IsEqualGUID(&mt->subtype, &MEDIASUBTYPE_IV50))
         format->u.video.version = 5;
     format->u.video.width = video_format->bmiHeader.biWidth;
@@ -1144,7 +1170,8 @@ static bool amt_to_wg_format_video_mpeg1(const AM_MEDIA_TYPE *mt, struct wg_form
         FIXME("Unknown format type %s.\n", debugstr_guid(&mt->formattype));
         return false;
     }
-    if (mt->cbFormat < sizeof(VIDEOINFOHEADER) || !mt->pbFormat)
+    if (!mt->pbFormat || mt->cbFormat < offsetof(MPEG1VIDEOINFO, bSequenceHeader)
+            || video_format->cbSequenceHeader > mt->cbFormat - offsetof(MPEG1VIDEOINFO, bSequenceHeader))
     {
         ERR("Unexpected format size %lu.\n", mt->cbFormat);
         return false;
@@ -1156,6 +1183,13 @@ static bool amt_to_wg_format_video_mpeg1(const AM_MEDIA_TYPE *mt, struct wg_form
     format->u.video.fps_n = 10000000;
     format->u.video.fps_d = video_format->hdr.AvgTimePerFrame;
 
+    format->u.video.codec_data_len = video_format->cbSequenceHeader;
+    if (format->u.video.codec_data_len > sizeof(format->u.video.codec_data))
+    {
+        ERR("Too big codec_data value (%u).\n", format->u.video.codec_data_len);
+        format->u.video.codec_data_len = 0;
+    }
+    memcpy(format->u.video.codec_data, video_format->bSequenceHeader, format->u.video.codec_data_len);
     return true;
 }
 
@@ -1832,9 +1866,13 @@ static HRESULT get_raw_media_type(struct wg_format *format, unsigned int index, 
 {
     static const enum wg_video_format video_formats[] =
     {
-        /* Try to prefer YUV formats over RGB ones. Most decoders output in the
-         * YUV color space, and it's generally much less expensive for
-         * videoconvert to do YUV -> YUV transformations. */
+        /* Prefer YUV over RGB, matching upstream. A previous change moved BGRA
+         * to the front on the assumption that ddraw refuses every YUV format,
+         * but that is wrong: vmr_query_accept() accepts any FOURCC reported by
+         * IDirectDraw7_GetFourCCCodes(), and YV12 is in that list. I420 is
+         * refused by the VMR, and the next candidate YV12 then connects fine
+         * over the ddraw YUV path. Listing BGRA first skipped that path and
+         * forced a YUV->RGB conversion through videoconvert instead. */
         WG_VIDEO_FORMAT_AYUV,
         WG_VIDEO_FORMAT_I420,
         WG_VIDEO_FORMAT_YV12,
@@ -1908,16 +1946,16 @@ static HRESULT decodebin_parser_source_get_media_type(struct parser_source *pin,
     return get_raw_media_type(&format, index, mt);
 }
 
-static HRESULT parser_create(BOOL output_compressed, struct parser **parser)
+static HRESULT parser_create(UINT32 flags, struct parser **parser)
 {
     struct parser *object;
 
     if (!(object = calloc(1, sizeof(*object))))
         return E_OUTOFMEMORY;
 
-    object->output_compressed = output_compressed;
+    object->output_compressed = flags & WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED;
 
-    if (!(object->wg_parser = wg_parser_create(output_compressed, FALSE)))
+    if (!(object->wg_parser = wg_parser_create(flags)))
     {
         free(object);
         return E_OUTOFMEMORY;
@@ -1937,7 +1975,7 @@ HRESULT decodebin_parser_create(IUnknown *outer, IUnknown **out)
     struct parser *object;
     HRESULT hr;
 
-    if (FAILED(hr = parser_create(FALSE, &object)))
+    if (FAILED(hr = parser_create(WG_PARSER_CREATE_FLAG_NONE, &object)))
         return hr;
 
     strmbase_filter_init(&object->filter, outer, &CLSID_decodebin_parser, &filter_ops);
@@ -2515,7 +2553,7 @@ HRESULT wave_parser_create(IUnknown *outer, IUnknown **out)
     struct parser *object;
     HRESULT hr;
 
-    if (FAILED(hr = parser_create(TRUE, &object)))
+    if (FAILED(hr = parser_create(WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED, &object)))
         return hr;
 
     strmbase_filter_init(&object->filter, outer, &CLSID_WAVEParser, &filter_ops);
@@ -2631,7 +2669,7 @@ HRESULT avi_splitter_create(IUnknown *outer, IUnknown **out)
     struct parser *object;
     HRESULT hr;
 
-    if (FAILED(hr = parser_create(TRUE, &object)))
+    if (FAILED(hr = parser_create(WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED, &object)))
         return hr;
 
     strmbase_filter_init(&object->filter, outer, &CLSID_AviSplitter, &filter_ops);
@@ -2797,7 +2835,8 @@ HRESULT mpeg_splitter_create(IUnknown *outer, IUnknown **out)
     struct parser *object;
     HRESULT hr;
 
-    if (FAILED(hr = parser_create(TRUE, &object)))
+    if (FAILED(hr = parser_create(WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED |
+                                  WG_PARSER_CREATE_FLAG_PTS_REBASED, &object)))
         return hr;
 
     strmbase_filter_init(&object->filter, outer, &CLSID_MPEG1Splitter, &mpeg_splitter_ops);

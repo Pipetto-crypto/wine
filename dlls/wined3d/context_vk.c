@@ -1089,32 +1089,45 @@ void wined3d_context_vk_destroy_vk_event(struct wined3d_context_vk *context_vk,
     o->command_buffer_id = command_buffer_id;
 }
 
-void wined3d_context_vk_destroy_vk_video_session(struct wined3d_context_vk *context_vk,
-        VkVideoSessionKHR vk_video_session, uint64_t command_buffer_id)
+void wined3d_context_vk_destroy_vk_video_session_memory(struct wined3d_context_vk *context_vk,
+        VkVideoSessionKHR vk_video_session, struct wined3d_video_session_memory_vk *memory,
+        uint32_t memory_count, uint64_t command_buffer_id)
 {
     struct wined3d_device_vk *device_vk = wined3d_device_vk(context_vk->c.device);
     const struct wined3d_vk_info *vk_info = context_vk->vk_info;
     struct wined3d_retired_object_vk *o;
+    uint32_t i;
 
-    /* The spec does not mention that the session may not be referenced by any
-     * active command buffers, but is probably an accidental omission.
-     * The proposal says "no longer used by any pending command buffers". */
-
+    /* Keep the session's backing memory alive until all commands using the
+     * session have completed, then destroy the session before its memory. */
     if (context_vk->completed_command_buffer_id >= command_buffer_id)
     {
-        VK_CALL(vkDestroyVideoSessionKHR(device_vk->vk_device, vk_video_session, NULL));
-        TRACE("Destroyed video session 0x%s.\n", wine_dbgstr_longlong(vk_video_session));
+        if (vk_video_session)
+        {
+            VK_CALL(vkDestroyVideoSessionKHR(device_vk->vk_device, vk_video_session, NULL));
+            TRACE("Destroyed video session 0x%s.\n", wine_dbgstr_longlong(vk_video_session));
+        }
+        for (i = 0; i < memory_count; ++i)
+        {
+            if (memory[i].memory_block)
+                wined3d_context_vk_free_memory(context_vk, memory[i].memory_block);
+            else if (memory[i].vk_memory)
+                VK_CALL(vkFreeMemory(device_vk->vk_device, memory[i].vk_memory, NULL));
+        }
+        free(memory);
         return;
     }
 
     if (!(o = wined3d_context_vk_get_retired_object_vk(context_vk)))
     {
-        ERR("Leaking video session 0x%s.\n", wine_dbgstr_longlong(vk_video_session));
+        ERR("Leaking video session 0x%s and its backing memory.\n", wine_dbgstr_longlong(vk_video_session));
         return;
     }
 
-    o->type = WINED3D_RETIRED_VIDEO_SESSION_VK;
-    o->u.vk_video_session = vk_video_session;
+    o->type = WINED3D_RETIRED_VIDEO_SESSION_MEMORY_VK;
+    o->u.video_session_memory.vk_session = vk_video_session;
+    o->u.video_session_memory.memory = memory;
+    o->u.video_session_memory.memory_count = memory_count;
     o->command_buffer_id = command_buffer_id;
 }
 
@@ -1343,7 +1356,7 @@ static void wined3d_context_vk_cleanup_resources(struct wined3d_context_vk *cont
     struct wined3d_command_buffer_vk *buffer;
     struct wined3d_retired_object_vk *o;
     uint64_t command_buffer_id;
-    SIZE_T i = 0;
+    SIZE_T i = 0, j;
 
     while (i < context_vk->submitted.buffer_count)
     {
@@ -1441,9 +1454,24 @@ static void wined3d_context_vk_cleanup_resources(struct wined3d_context_vk *cont
                 TRACE("Destroyed pipeline 0x%s.\n", wine_dbgstr_longlong(o->u.vk_pipeline));
                 break;
 
-            case WINED3D_RETIRED_VIDEO_SESSION_VK:
-                VK_CALL(vkDestroyVideoSessionKHR(device_vk->vk_device, o->u.vk_video_session, NULL));
-                TRACE("Destroyed video session 0x%s.\n", wine_dbgstr_longlong(o->u.vk_video_session));
+            case WINED3D_RETIRED_VIDEO_SESSION_MEMORY_VK:
+                if (o->u.video_session_memory.vk_session)
+                {
+                    VK_CALL(vkDestroyVideoSessionKHR(device_vk->vk_device,
+                            o->u.video_session_memory.vk_session, NULL));
+                    TRACE("Destroyed video session 0x%s.\n",
+                            wine_dbgstr_longlong(o->u.video_session_memory.vk_session));
+                }
+                for (j = 0; j < o->u.video_session_memory.memory_count; ++j)
+                {
+                    struct wined3d_video_session_memory_vk *memory = &o->u.video_session_memory.memory[j];
+
+                    if (memory->memory_block)
+                        wined3d_context_vk_free_memory(context_vk, memory->memory_block);
+                    else if (memory->vk_memory)
+                        VK_CALL(vkFreeMemory(device_vk->vk_device, memory->vk_memory, NULL));
+                }
+                free(o->u.video_session_memory.memory);
                 break;
 
             case WINED3D_RETIRED_VIDEO_PARAMETERS_VK:
@@ -1906,15 +1934,18 @@ void wined3d_context_vk_cleanup(struct wined3d_context_vk *context_vk)
     struct wined3d_command_buffer_vk *buffer = &context_vk->current_command_buffer;
     struct wined3d_device_vk *device_vk = wined3d_device_vk(context_vk->c.device);
     const struct wined3d_vk_info *vk_info = context_vk->vk_info;
+    VkResult vr;
     unsigned int i;
 
-    if (buffer->vk_command_buffer)
-    {
-        free_command_buffer(context_vk, buffer);
-        buffer->vk_command_buffer = VK_NULL_HANDLE;
-    }
+    /* Decode submissions signal semaphores which may still be waiting in this
+     * context's graphics queue. Submit that wait before draining the device. */
+    if (buffer->vk_command_buffer || context_vk->wait_semaphore_count)
+        wined3d_context_vk_submit_command_buffer(context_vk, 0, NULL, NULL, 0, NULL);
 
-    wined3d_context_vk_wait_command_buffer(context_vk, buffer->id - 1);
+    if ((vr = VK_CALL(vkDeviceWaitIdle(device_vk->vk_device))) != VK_SUCCESS)
+        ERR("Failed to wait for device idle during context cleanup, vr %s.\n", wined3d_debug_vkresult(vr));
+
+    wined3d_context_vk_cleanup_resources(context_vk, VK_NULL_HANDLE);
     context_vk->completed_command_buffer_id = buffer->id;
     for (i = 0; i < context_vk->completed.buffer_count; ++i)
         free_command_buffer(context_vk, &context_vk->completed.buffers[i]);

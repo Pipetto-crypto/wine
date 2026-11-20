@@ -163,10 +163,200 @@ static void copy_plane(BYTE **dstp, unsigned int dst_pitch, unsigned int dst_hei
     *dstp += dst_pitch * dst_height;
 }
 
+static BOOL vmr_size_mul(size_t a, size_t b, size_t *result)
+{
+    if (a && b > (size_t)-1 / a)
+        return FALSE;
+    *result = a * b;
+    return TRUE;
+}
+
+static BOOL vmr_size_add(size_t a, size_t b, size_t *result)
+{
+    if (b > (size_t)-1 - a)
+        return FALSE;
+    *result = a + b;
+    return TRUE;
+}
+
+static BOOL vmr_compare_plane(const BYTE *src, size_t src_size, size_t src_offset, unsigned int src_pitch,
+        const BYTE *dst, size_t dst_size, size_t dst_offset, unsigned int dst_pitch,
+        unsigned int row_bytes, unsigned int rows, BOOL flip, const char *plane,
+        DWORD *mismatches, const char **first_plane, DWORD *first_row, DWORD *first_column)
+{
+    unsigned int row;
+
+    if (row_bytes > src_pitch || row_bytes > dst_pitch)
+        return FALSE;
+
+    for (row = 0; row < rows; ++row)
+    {
+        size_t src_row, dst_row, row_offset;
+        unsigned int src_index = flip ? rows - row - 1 : row;
+        unsigned int column;
+
+        if (!vmr_size_mul(src_index, src_pitch, &row_offset)
+                || !vmr_size_add(src_offset, row_offset, &src_row)
+                || !vmr_size_mul(row, dst_pitch, &row_offset)
+                || !vmr_size_add(dst_offset, row_offset, &dst_row)
+                || src_row > src_size || row_bytes > src_size - src_row
+                || dst_row > dst_size || row_bytes > dst_size - dst_row)
+            return FALSE;
+
+        for (column = 0; column < row_bytes; ++column)
+        {
+            if (src[src_row + column] == dst[dst_row + column])
+                continue;
+            if (!*mismatches)
+            {
+                *first_plane = plane;
+                *first_row = row;
+                *first_column = column;
+            }
+            ++*mismatches;
+        }
+    }
+
+    return TRUE;
+}
+
+static void vmr_check_copy(const BITMAPINFOHEADER *header, unsigned int width, int height,
+        unsigned int src_pitch, const BYTE *data, unsigned int data_size,
+        const DDSURFACEDESC2 *surface_desc, BOOL time_valid, REFERENCE_TIME start_time,
+        unsigned int frame_count)
+{
+    unsigned int frame_height = height < 0 ? 0u - (unsigned int)height : (unsigned int)height;
+    unsigned int dst_pitch, src_chroma_pitch, dst_chroma_pitch, chroma_rows, chroma_row_bytes;
+    DWORD format = header->biCompression, mismatches = 0, first_row = 0, first_column = 0;
+    size_t src_y_size, dst_y_size, src_chroma_size, dst_chroma_size, src_size, dst_size, offset;
+    const char *first_plane = NULL, *result = "unsupported";
+    BOOL valid = FALSE, flip = height < 0;
+
+    if ((format != mmioFOURCC('Y','V','1','2') && format != mmioFOURCC('N','V','1','2'))
+            || (surface_desc->ddpfPixelFormat.dwFlags & DDPF_FOURCC) == 0
+            || surface_desc->ddpfPixelFormat.dwFourCC != format
+            || surface_desc->dwWidth != width || surface_desc->dwHeight != frame_height
+            || surface_desc->lPitch <= 0 || !surface_desc->lpSurface
+            || !width || !frame_height || (width & 1) || (frame_height & 1))
+        goto done;
+
+    dst_pitch = surface_desc->lPitch;
+    src_chroma_pitch = format == mmioFOURCC('Y','V','1','2') ? src_pitch / 2 : src_pitch;
+    dst_chroma_pitch = format == mmioFOURCC('Y','V','1','2') ? dst_pitch / 2 : dst_pitch;
+    chroma_rows = frame_height / 2;
+    chroma_row_bytes = format == mmioFOURCC('Y','V','1','2') ? width / 2 : width;
+
+    if (!vmr_size_mul(src_pitch, frame_height, &src_y_size)
+            || !vmr_size_mul(dst_pitch, frame_height, &dst_y_size)
+            || !vmr_size_mul(src_chroma_pitch, chroma_rows, &src_chroma_size)
+            || !vmr_size_mul(dst_chroma_pitch, chroma_rows, &dst_chroma_size)
+            || !vmr_size_add(src_y_size, src_chroma_size, &src_size)
+            || !vmr_size_add(dst_y_size, dst_chroma_size, &dst_size))
+        goto done;
+
+    if (format == mmioFOURCC('Y','V','1','2'))
+    {
+        if (!vmr_size_add(src_size, src_chroma_size, &src_size)
+                || !vmr_size_add(dst_size, dst_chroma_size, &dst_size))
+            goto done;
+    }
+    if (data_size < src_size)
+        goto done;
+
+    valid = vmr_compare_plane(data, data_size, 0, src_pitch, surface_desc->lpSurface, dst_size, 0,
+            dst_pitch, width, frame_height, flip, "Y", &mismatches, &first_plane, &first_row, &first_column);
+    if (!valid)
+        goto done;
+
+    if (format == mmioFOURCC('Y','V','1','2'))
+    {
+        offset = src_y_size;
+        valid = vmr_compare_plane(data, data_size, offset, src_chroma_pitch, surface_desc->lpSurface,
+                dst_size, dst_y_size, dst_chroma_pitch, chroma_row_bytes, chroma_rows, flip, "V",
+                &mismatches, &first_plane, &first_row, &first_column);
+        if (!valid)
+            goto done;
+        if (!vmr_size_add(src_y_size, src_chroma_size, &offset))
+        {
+            valid = FALSE;
+            goto done;
+        }
+        valid = vmr_compare_plane(data, data_size, offset, src_chroma_pitch, surface_desc->lpSurface,
+                dst_size, dst_y_size + dst_chroma_size, dst_chroma_pitch, chroma_row_bytes,
+                chroma_rows, flip, "U", &mismatches, &first_plane, &first_row, &first_column);
+    }
+    else
+    {
+        valid = vmr_compare_plane(data, data_size, src_y_size, src_chroma_pitch, surface_desc->lpSurface,
+                dst_size, dst_y_size, dst_chroma_pitch, chroma_row_bytes, chroma_rows, flip, "UV",
+                &mismatches, &first_plane, &first_row, &first_column);
+    }
+
+    if (valid)
+        result = mismatches ? "MISMATCH" : "match";
+
+done:
+    WARN("copycheck #%u time %s subtype %#lx surface %#lx %ux%u size %u pitch %u/%lu %s mismatches %lu first %s:%u,%u.\n",
+            frame_count, time_valid ? debugstr_time(start_time) : "invalid", format,
+            surface_desc->ddpfPixelFormat.dwFourCC, width, frame_height, data_size,
+            src_pitch, (unsigned long)surface_desc->lPitch, result, mismatches,
+            first_plane ? first_plane : "none", first_row, first_column);
+}
+
+static BOOL vmr_fill_yv12_test_pattern(DDSURFACEDESC2 *surface_desc, unsigned int width,
+        unsigned int height)
+{
+    BYTE *surface;
+    size_t y_size, chroma_size, total_size;
+    unsigned int pitch, chroma_pitch, chroma_rows;
+
+    if (!(surface_desc->ddpfPixelFormat.dwFlags & DDPF_FOURCC)
+            || surface_desc->ddpfPixelFormat.dwFourCC != mmioFOURCC('Y','V','1','2')
+            || surface_desc->lPitch <= 0 || (surface_desc->lPitch & 1)
+            || surface_desc->dwWidth != width || surface_desc->dwHeight != height
+            || !width || !height || (width & 1) || (height & 1) || !surface_desc->lpSurface)
+        return FALSE;
+
+    pitch = surface_desc->lPitch;
+    if (pitch < width)
+        return FALSE;
+    chroma_pitch = pitch / 2;
+    chroma_rows = height / 2;
+
+    if (!vmr_size_mul(pitch, height, &y_size)
+            || !vmr_size_mul(chroma_pitch, chroma_rows, &chroma_size)
+            || !vmr_size_add(y_size, chroma_size, &total_size)
+            || !vmr_size_add(total_size, chroma_size, &total_size))
+        return FALSE;
+
+    surface = surface_desc->lpSurface;
+    memset(surface, 235, y_size);
+    memset(surface + y_size, 128, total_size - y_size);
+    return surface[0] == 235 && surface[y_size] == 128
+            && surface[y_size + chroma_size] == 128;
+}
+
+static LONG vmr_claim_test_pattern_frame(volatile LONG *count)
+{
+    LONG current;
+
+    do
+    {
+        current = InterlockedCompareExchange(count, 0, 0);
+        if (current >= 30)
+            return 0;
+    }
+    while (InterlockedCompareExchange(count, current + 1, current) != current);
+
+    return current + 1;
+}
+
 static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
 {
     struct vmr7 *filter = impl_from_IBaseFilter(&iface->filter.IBaseFilter_iface);
-    unsigned int data_size, width, depth, src_pitch;
+    static volatile LONG diag_count, pattern_count;
+    LONG diag_frame_count, pattern_frame_count;
+    unsigned int data_size, width, depth, src_pitch, frame_height;
     const BITMAPINFOHEADER *bitmap_header;
     REFERENCE_TIME start_time, end_time;
     VMRPRESENTATIONINFO info = {0};
@@ -174,6 +364,8 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
     BYTE *data = NULL;
     HRESULT hr;
     int height;
+    BOOL time_valid, diag_sample, test_pattern, pattern_applied = FALSE;
+    char pattern_env[16];
 
     TRACE("filter %p, sample %p.\n", filter, sample);
 
@@ -185,7 +377,8 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
 
     info.dwFlags = VMR9Sample_SrcDstRectsValid;
 
-    if (SUCCEEDED(hr = IMediaSample_GetTime(sample, &start_time, &end_time)))
+    time_valid = SUCCEEDED(hr = IMediaSample_GetTime(sample, &start_time, &end_time));
+    if (time_valid)
         info.dwFlags |= VMR9Sample_TimeValid;
 
     if (IMediaSample_IsDiscontinuity(sample) == S_OK)
@@ -204,10 +397,20 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
     }
     data_size = IMediaSample_GetActualDataLength(sample);
     TRACE("Sample size %u.\n", data_size);
+    diag_frame_count = InterlockedIncrement(&diag_count);
+    diag_sample = !((diag_frame_count - 1) % 120);
+    test_pattern = GetEnvironmentVariableA("WINE_VMR7_TEST_PATTERN", pattern_env,
+            ARRAY_SIZE(pattern_env)) == 1 && pattern_env[0] == '1';
 
     bitmap_header = get_filter_bitmap_header(filter);
     width = bitmap_header->biWidth;
     height = bitmap_header->biHeight;
+    if (height == INT_MIN)
+    {
+        ERR("Invalid video height %d.\n", height);
+        return E_INVALIDARG;
+    }
+    frame_height = height < 0 ? (unsigned int)-height : (unsigned int)height;
     depth = bitmap_header->biBitCount;
     if (bitmap_header->biCompression == mmioFOURCC('N','V','1','2')
             || bitmap_header->biCompression == mmioFOURCC('Y','V','1','2'))
@@ -215,9 +418,12 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
     else /* packed YUV (UYVY or YUY2) or RGB */
         src_pitch = ((width * depth / 8) + 3) & ~3;
 
-    info.dwFlags = VMRSample_TimeValid;
-    info.rtStart = start_time;
-    info.rtEnd = end_time;
+    info.dwFlags = time_valid ? VMRSample_TimeValid : 0;
+    if (time_valid)
+    {
+        info.rtStart = start_time;
+        info.rtEnd = end_time;
+    }
     info.szAspectRatio.cx = width;
     info.szAspectRatio.cy = height;
     info.lpSurf = filter->surfaces[(--filter->surface_index) % filter->surface_count];
@@ -234,7 +440,46 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
         return hr;
     }
 
-    if (width > surface_desc.dwWidth || abs(height)  > surface_desc.dwHeight)
+    if (diag_sample && bitmap_header->biCompression == mmioFOURCC('Y','V','1','2'))
+    {
+        unsigned int ymin = 255, ymax = 0, umin = 255, umax = 0, vmin = 255, vmax = 0;
+        size_t i, ylen, clen, expected_size;
+        unsigned long long ysum = 0;
+        const BYTE *p = data;
+
+        if (!vmr_size_mul(src_pitch, frame_height, &ylen)
+                || !vmr_size_add(ylen, ylen / 2, &expected_size) || data_size < expected_size)
+        {
+            WARN("samplecheck #%ld time %s invalid YV12 sample size %u.\n", diag_frame_count,
+                    time_valid ? debugstr_time(start_time) : "invalid", data_size);
+        }
+        else
+        {
+            clen = ylen / 4;
+            for (i = 0; i < ylen; ++i)
+            {
+                ysum += p[i];
+                if (p[i] < ymin) ymin = p[i];
+                if (p[i] > ymax) ymax = p[i];
+            }
+            /* YV12 stores V before U. */
+            for (i = 0; i < clen; ++i)
+            {
+                if (p[ylen + i] < vmin) vmin = p[ylen + i];
+                if (p[ylen + i] > vmax) vmax = p[ylen + i];
+            }
+            for (i = 0; i < clen; ++i)
+            {
+                if (p[ylen + clen + i] < umin) umin = p[ylen + clen + i];
+                if (p[ylen + clen + i] > umax) umax = p[ylen + clen + i];
+            }
+            WARN("samplecheck #%ld time %s Y[%u..%u] U[%u..%u] V[%u..%u] bytes %u avgY %u.\n",
+                    diag_frame_count, time_valid ? debugstr_time(start_time) : "invalid",
+                    ymin, ymax, umin, umax, vmin, vmax, data_size,
+                    (unsigned int)(ylen ? ysum / ylen : 0));
+        }
+    }
+    if (width > surface_desc.dwWidth || frame_height > surface_desc.dwHeight)
     {
         FIXME("src surface (%ux%u) larger than rendering surface (%lux%lu).\n", width, height,
                 surface_desc.dwWidth, surface_desc.dwHeight);
@@ -280,7 +525,32 @@ static HRESULT vmr_render(struct strmbase_renderer *iface, IMediaSample *sample)
         memcpy(surface_desc.lpSurface, data, data_size);
     }
 
-    IDirectDrawSurface7_Unlock(info.lpSurf, NULL);
+    if (test_pattern && (pattern_frame_count = vmr_claim_test_pattern_frame(&pattern_count)))
+    {
+        if (vmr_fill_yv12_test_pattern(&surface_desc, width, frame_height))
+        {
+            pattern_applied = TRUE;
+            WARN("testpattern #%ld time %s Y=235 UV=128 surface %lux%lu pitch %lu.\n",
+                    pattern_frame_count, time_valid ? debugstr_time(start_time) : "invalid",
+                    (unsigned long)surface_desc.dwWidth, (unsigned long)surface_desc.dwHeight,
+                    (unsigned long)surface_desc.lPitch);
+        }
+        else
+        {
+            InterlockedDecrement(&pattern_count);
+            if (diag_sample)
+                WARN("testpattern not applied: incompatible YV12 surface.\n");
+        }
+    }
+
+    if (diag_sample && !pattern_applied)
+        vmr_check_copy(bitmap_header, width, bitmap_header->biHeight, src_pitch, data, data_size,
+                &surface_desc, time_valid, start_time, diag_frame_count);
+
+    if (FAILED(hr = IDirectDrawSurface7_Unlock(info.lpSurf, NULL)))
+        ERR("Failed to unlock rendering surface, hr %#lx.\n", hr);
+    else if (pattern_applied)
+        WARN("testpattern unlock succeeded surface %p.\n", info.lpSurf);
 
     return IVMRImagePresenter_PresentImage(filter->presenter, filter->cookie, &info);
 }
@@ -339,6 +609,28 @@ static HRESULT vmr_query_accept(struct strmbase_renderer *iface, const AM_MEDIA_
             return S_FALSE;
     }
 
+    {
+        DWORD cnt, n, list[32], k;
+        char buf[256];
+        WARN("QAPROBE fourcc %#lx (%c%c%c%c) filter_ddraw %p tmp_ddraw %p fmttype %s comp %u size %ux%u.\n",
+                (unsigned long)bitmap_header->biCompression,
+                (int)(bitmap_header->biCompression & 0xff),
+                (int)((bitmap_header->biCompression >> 8) & 0xff),
+                (int)((bitmap_header->biCompression >> 16) & 0xff),
+                (int)((bitmap_header->biCompression >> 24) & 0xff),
+                filter->ddraw, ddraw, wine_dbgstr_guid(&mt->formattype),
+                bitmap_header->biCompression, bitmap_header->biWidth, bitmap_header->biHeight);
+        cnt = 32;
+        if (SUCCEEDED(IDirectDraw7_GetFourCCCodes(ddraw, &cnt, list)))
+        {
+            buf[0] = 0;
+            for (n = 0, k = 0; n < cnt && k + 6 < sizeof(buf); ++n)
+                k += sprintf(buf + k, "%c%c%c%c ",
+                        (int)(list[n] & 0xff), (int)((list[n] >> 8) & 0xff),
+                        (int)((list[n] >> 16) & 0xff), (int)((list[n] >> 24) & 0xff));
+            WARN("QAPROBE ddraw codes (%lu): %s\n", (unsigned long)cnt, buf);
+        }
+    }
     if (!fourcc_is_supported(ddraw, bitmap_header->biCompression))
         hr = S_FALSE;
 

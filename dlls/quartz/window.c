@@ -689,7 +689,7 @@ HRESULT WINAPI BaseControlWindowImpl_GetRestorePosition(IVideoWindow *iface, LON
     WINDOWPLACEMENT p;
     HMONITOR mon;
 
-    TRACE("(%p/%p)->(%p, %p, %p, %p): stub !!!\n", window, iface, left, top, width, height);
+    TRACE("window %p, left %p, top %p, width %p, height %p.\n", window, left, top, width, height);
 
     if (!GetMonitorInfoW((mon = MonitorFromWindow(window->hwnd, MONITOR_DEFAULTTONEAREST)), &info))
         return E_FAIL;
@@ -862,6 +862,8 @@ static HRESULT WINAPI basic_video_get_VideoWidth(IBasicVideo *iface, LONG *width
 
     if (!width)
         return E_POINTER;
+    if (!window->pPin->peer)
+        return VFW_E_NOT_CONNECTED;
 
     *width = get_bitmap_header(window)->biWidth;
 
@@ -876,6 +878,8 @@ static HRESULT WINAPI basic_video_get_VideoHeight(IBasicVideo *iface, LONG *heig
 
     if (!height)
         return E_POINTER;
+    if (!window->pPin->peer)
+        return VFW_E_NOT_CONNECTED;
 
     *height = abs(get_bitmap_header(window)->biHeight);
 

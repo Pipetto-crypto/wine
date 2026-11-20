@@ -27,7 +27,6 @@
 #include <assert.h>
 
 #include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "dbghelp_private.h"
 #include "image_private.h"
 #include "winternl.h"
@@ -522,7 +521,7 @@ static BOOL pe_load_coff_symbol_table(struct module* module)
             if (name[0] == '_') name++;
 
             if (!compiland && lastfilename)
-                compiland = symt_new_compiland(module, lastfilename);
+                compiland = symt_new_compiland(module, symt_ptr_to_symref(&module->top->symt), lastfilename);
 
             if (!(dbghelp_options & SYMOPT_NO_PUBLICS))
                 symt_new_public(module, compiland, name, FALSE,
@@ -979,6 +978,7 @@ BOOL pe_load_nt_header(HANDLE hProc, DWORD64 base, IMAGE_NT_HEADERS* nth, BOOL* 
 
     if (!ReadProcessMemory(hProc, (char*)(DWORD_PTR)base, &dos, sizeof(dos), NULL) ||
         dos.e_magic != IMAGE_DOS_SIGNATURE ||
+        (ULONG)dos.e_lfanew >= RTL_IMAGE_MAX_DOS_HEADER ||
         !ReadProcessMemory(hProc, (char*)(DWORD_PTR)(base + dos.e_lfanew),
                            nth, sizeof(*nth), NULL) ||
         nth->Signature != IMAGE_NT_SIGNATURE)

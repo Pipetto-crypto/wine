@@ -761,6 +761,7 @@ SOURCES = \
 	socketapi.h \
 	softpub.h \
 	spatialaudioclient.idl \
+	intsafe.h \
 	specstrings.h \
 	specstrings_strict.h \
 	sperror.h \
@@ -993,6 +994,9 @@ SOURCES = \
 	wine/strmbase.h \
 	wine/svcctl.idl \
 	wine/test.h \
+	wine/tgmux_emulator.h \
+	wine/tgmux_fsync.h \
+	wine/tgmux_paths.h \
 	wine/unixlib.h \
 	wine/vulkan.h \
 	wine/vulkan_driver.h \

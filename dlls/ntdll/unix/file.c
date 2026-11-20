@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <unistd.h>
+#include "wine/tgmux_paths.h"
 #ifdef HAVE_MNTENT_H
 #include <mntent.h>
 #endif
@@ -907,6 +908,12 @@ static char *get_default_drive_device( const char *root )
         fclose( f );
     }
     /* look through fstab too in case it's not mounted (for instance if it's an audio CD) */
+    if (!device && (f = fopen( WINE_TGMUX_PATH( "/etc/fstab" ), "r" )))
+    {
+        device = parse_mount_entries( f, st.st_dev, st.st_ino );
+        fclose( f );
+    }
+    /* Termux keeps its own fstab inside the glibc prefix. */
     if (!device && (f = fopen( "/etc/fstab", "r" )))
     {
         device = parse_mount_entries( f, st.st_dev, st.st_ino );

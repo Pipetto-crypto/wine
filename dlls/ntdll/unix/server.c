@@ -67,6 +67,7 @@
 #include <sys/thr.h>
 #endif
 #include <unistd.h>
+#include "wine/tgmux_paths.h"
 #ifdef __APPLE__
 #include <crt_externs.h>
 #include <spawn.h>
@@ -1339,7 +1340,8 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
 #else
-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
+    asprintf( &dir, "%s/.wine-%u/server-%llx-%llx", tgmux_tmpdir(), getuid(),
+              (unsigned long long)dev, (unsigned long long)ino );
 #endif
     return dir;
 }
@@ -1405,7 +1407,8 @@ static int setup_config_dir(void)
         mkdir( "drive_c", 0777 );
         set_case_insensitive( "drive_c" );
         symlink( "../drive_c", "dosdevices/c:" );
-        symlink( "/", "dosdevices/z:" );
+        /* Keep Z: inside the Termux private tree instead of exposing "/" to Windows apps. */
+        symlink( tgmux_zdrive_root(), "dosdevices/z:" );
     }
     else if (errno != EEXIST) fatal_perror( "cannot create %s/dosdevices", config_dir );
 

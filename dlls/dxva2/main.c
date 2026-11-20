@@ -605,6 +605,10 @@ static HRESULT WINAPI device_manager_processor_service_CreateVideoProcessor(IDir
     FIXME("%p, %s, %p, %d, %u, %p.\n", iface, debugstr_guid(device), video_desc, rt_format, max_substreams,
             processor);
 
+    if (video_desc)
+        WARN("processor: desc format %#x, %ux%u, rt_format %#x.\n",
+                video_desc->Format, video_desc->SampleWidth, video_desc->SampleHeight, rt_format);
+
     /* FIXME: validate render target format */
 
     if (max_substreams >= 16)

@@ -2684,6 +2684,15 @@ void detach_client_window( struct x11drv_win_data *data, Window client_window )
         XReparentWindow( gdi_display, client_window, get_dummy_parent(), 0, 0 );
     }
 
+    /* A detached client window is no longer part of its host window and must
+     * not stay on screen. Reparenting it to the dummy parent is not enough:
+     * when the X server does not clip children to their parent geometry (and
+     * when XShape is unavailable, so the dummy parent has no empty shape),
+     * the window keeps being displayed at its old size and position. That is
+     * the stray window that appears whenever a second client window is needed,
+     * for instance when video playback creates another surface. */
+    XUnmapWindow( gdi_display, client_window );
+
     data->client_window = 0;
 }
 
@@ -2706,7 +2715,9 @@ void attach_client_window( struct x11drv_win_data *data, Window client_window )
                          data->rects.client.top - data->rects.visible.top );
     }
 
-    set_wine_allow_flip( client_window, 1 );
+    set_wine_allow_flip( client_window, !!data->whole_window );
+    /* detach_client_window() unmaps, including when reattaching the same window. */
+    if (data->whole_window) XMapWindow( gdi_display, client_window );
 
     data->client_window = client_window;
 }
@@ -2770,9 +2781,18 @@ Window create_client_window( HWND hwnd, RECT client_rect, const XVisualInfo *vis
     if (data->client_window)
     {
         set_wine_allow_flip( data->client_window, !!data->whole_window );
-        XMapWindow( gdi_display, data->client_window );
-        XFlush( gdi_display ); /* make sure client_window is created for XSelectInput */
-        if (data->whole_window) client_window_events_enable( data, data->client_window );
+        if (data->whole_window)
+        {
+            XMapWindow( gdi_display, data->client_window );
+            XFlush( gdi_display ); /* make sure client_window is created for XSelectInput */
+            client_window_events_enable( data, data->client_window );
+        }
+        else
+        {
+            /* Keep clients of the dummy parent hidden until they have a real host window. */
+            TRACE( "%p no whole window, leaving client window %lx unmapped\n",
+                   data->hwnd, data->client_window );
+        }
         TRACE( "%p xwin %lx/%lx\n", data->hwnd, data->whole_window, data->client_window );
     }
 

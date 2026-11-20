@@ -5006,6 +5006,22 @@ if (SUCCEEDED(hr))
 
     IMFMediaType_Release(mediatype);
 
+    /* Keep all audio parameters unchanged and reject only the different subtype. */
+    hr = MFCreateMediaType(&mediatype3);
+    ok(hr == S_OK, "Failed to create media type, hr %#lx.\n", hr);
+    hr = IMFMediaType_CopyAllItems(mediatype2, (IMFAttributes *)mediatype3);
+    ok(hr == S_OK, "Failed to copy media type, hr %#lx.\n", hr);
+    hr = IMFMediaType_GetGUID(mediatype2, &MF_MT_SUBTYPE, &guid);
+    ok(hr == S_OK, "Failed to get subtype, hr %#lx.\n", hr);
+    hr = IMFMediaType_SetGUID(mediatype3, &MF_MT_SUBTYPE,
+            IsEqualGUID(&guid, &MFAudioFormat_Float) ? &MFAudioFormat_PCM : &MFAudioFormat_Float);
+    ok(hr == S_OK, "Failed to set subtype, hr %#lx.\n", hr);
+    hr = IMFMediaTypeHandler_IsMediaTypeSupported(handler, mediatype3, NULL);
+    ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#lx.\n", hr);
+    hr = IMFMediaTypeHandler_SetCurrentMediaType(handler, mediatype3);
+    ok(hr == MF_E_INVALIDMEDIATYPE, "Unexpected hr %#lx.\n", hr);
+    IMFMediaType_Release(mediatype3);
+
     check_sar_rate_support(sink);
 
     hr = IMFMediaTypeHandler_SetCurrentMediaType(handler, mediatype2);

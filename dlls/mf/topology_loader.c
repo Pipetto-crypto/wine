@@ -899,7 +899,7 @@ static BOOL topology_node_get_object_attributes(IMFTopologyNode *node, IMFAttrib
         return hr;
     }
 
-    return topology_node_get_object(node, &IID_IMFAttributes, (void **)&attributes);
+    return topology_node_get_object(node, &IID_IMFAttributes, (void **)attributes);
 }
 
 BOOL topology_node_is_d3d_aware(IMFTopologyNode *node)
@@ -1006,7 +1006,7 @@ HRESULT topology_node_set_device_manager(IMFTopologyNode *node, IUnknown *device
 
         for (i = 0; SUCCEEDED(hr) && i < count; i++)
         {
-            if (FAILED(IMFTopologyNode_GetInput(node, 0, &upstream, &output)))
+            if (FAILED(IMFTopologyNode_GetInput(node, i, &upstream, &output)))
                 continue;
 
             if (topology_node_is_d3d_aware(upstream))
@@ -1047,38 +1047,66 @@ static HRESULT topology_loader_connect_d3d_aware_sink(IMFTopology *topology,
     if (FAILED(hr = topology_node_get_object(node, &IID_IMFStreamSink, (void **)&stream_sink)))
         return hr;
 
-    if (SUCCEEDED(hr = stream_sink_get_device_manager(stream_sink, &device_manager)))
+    /* The copier is what connects the upstream node to the sink. Whether the
+     * sink exposes a device manager is a separate question: a sink that does
+     * not implement MR_VIDEO_ACCELERATION_SERVICE is simply not D3D-aware and
+     * has to be fed through the CPU sample copier. Gating the copier on the
+     * device manager meant that such a sink was never connected at all, which
+     * shows up later as session_sa_ready_callback_Invoke() failing to find
+     * the sink input and the video staying black. */
+    if (FAILED(stream_sink_get_device_manager(stream_sink, &device_manager)))
+        device_manager = NULL;
+
+    if (SUCCEEDED(IMFTopologyNode_GetInput(node, 0, &upstream_node, &upstream_output)))
     {
-        if (SUCCEEDED(IMFTopologyNode_GetInput(node, 0, &upstream_node, &upstream_output)))
+        BOOL needs_copier = dxva_mode == MFTOPOLOGY_DXVA_DEFAULT;
+        IMFTransform *transform;
+
+        if (needs_copier && SUCCEEDED(topology_node_get_object(upstream_node, &IID_IMFTransform, (void **)&transform)))
         {
-            BOOL needs_copier = dxva_mode == MFTOPOLOGY_DXVA_DEFAULT;
-            IMFTransform *transform;
+            MFT_OUTPUT_STREAM_INFO info = {0};
 
-            if (needs_copier && SUCCEEDED(topology_node_get_object(upstream_node, &IID_IMFTransform, (void **)&transform)))
-            {
-                MFT_OUTPUT_STREAM_INFO info = {0};
+            if (FAILED(IMFTransform_GetOutputStreamInfo(transform, upstream_output, &info))
+                    || !(info.dwFlags & (MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES | MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)))
+                needs_copier = FALSE;
 
-                if (FAILED(IMFTransform_GetOutputStreamInfo(transform, upstream_output, &info))
-                        || !(info.dwFlags & (MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES | MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)))
-                    needs_copier = FALSE;
-
-                IMFTransform_Release(transform);
-            }
-
-            if (needs_copier && SUCCEEDED(hr = topology_loader_create_copier(upstream_node, upstream_output, node, 0, &copier)))
-            {
-                hr = topology_loader_connect_copier(topology, upstream_node, upstream_output, node, 0, copier);
-                IMFTransform_Release(copier);
-            }
-
-            if (dxva_mode == MFTOPOLOGY_DXVA_FULL && topology_node_is_d3d_aware(upstream_node))
-                topology_node_set_device_manager(upstream_node, device_manager);
-
-            IMFTopologyNode_Release(upstream_node);
+            IMFTransform_Release(transform);
         }
 
-        IUnknown_Release(device_manager);
+        /* sample_copier only implements video. Inserting it in front of an
+         * audio sink makes SetInputType fail with E_NOTIMPL, so restrict it
+         * to streams whose current type is video. */
+        if (needs_copier)
+        {
+            IMFMediaType *up_type;
+
+            if (SUCCEEDED(MFGetTopoNodeCurrentType(upstream_node, upstream_output, TRUE, &up_type)))
+            {
+                GUID major = { 0 };
+
+                IMFMediaType_GetMajorType(up_type, &major);
+                if (!IsEqualGUID(&major, &MFMediaType_Video))
+                    needs_copier = FALSE;
+                IMFMediaType_Release(up_type);
+            }
+            else
+                needs_copier = FALSE;
+        }
+
+        if (needs_copier && SUCCEEDED(hr = topology_loader_create_copier(upstream_node, upstream_output, node, 0, &copier)))
+        {
+            hr = topology_loader_connect_copier(topology, upstream_node, upstream_output, node, 0, copier);
+            IMFTransform_Release(copier);
+        }
+
+        if (dxva_mode == MFTOPOLOGY_DXVA_FULL && device_manager && topology_node_is_d3d_aware(upstream_node))
+            topology_node_set_device_manager(upstream_node, device_manager);
+
+        IMFTopologyNode_Release(upstream_node);
     }
+
+    if (device_manager)
+        IUnknown_Release(device_manager);
 
     IMFStreamSink_Release(stream_sink);
 

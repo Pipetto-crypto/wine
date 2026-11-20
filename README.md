@@ -17,6 +17,7 @@ From the top-level directory of the Wine source (which contains this file),
 run:
 
 ```
+./autogen.sh  # Git checkout only, to generate configure and headers
 ./configure
 make
 ```
@@ -93,7 +94,8 @@ support kernel threads may be supported in the future.
 
 ## COMPILATION
 
-To build Wine, do:
+To build Wine, generate the build files with `./autogen.sh` if `configure`
+is missing, then run:
 
 ```
 ./configure
@@ -145,6 +147,16 @@ wine notepad.exe readme.txt          (calling program with parameters)
 Wine is not perfect, so some programs may crash. If that happens you
 will get a crash log that you should attach to your report when filing
 a bug.
+
+### Termux glibc
+
+This branch uses DWProton's ntsync/fsync implementation, not the previous
+esync server protocol. Stop the old wineserver before switching versions
+and run the matching Wine and wineserver from the same build. If POSIX
+shared memory is unavailable, fsync can use the Termux temporary directory
+(`WINE_TMP_DIR`, then `TMPDIR`, then the built-in default). To select a
+separate directory for fsync, set `WINE_FSYNC_SHM_DIR` to an absolute,
+writable directory shared by wineserver and its clients.
 
 
 ## GETTING MORE INFORMATION

@@ -47,6 +47,16 @@
 
 #include "unix_private.h"
 
+/* Optional runtime overrides for the GStreamer pipeline. Both default to
+ * off, so behaviour is unchanged unless the user explicitly opts in. Read
+ * here on the Unix side, where getenv() is available. */
+static bool wg_env_enabled(const char *name)
+{
+    const char *value = getenv(name);
+
+    return value && *value && strcmp(value, "0");
+}
+
 extern GstGLDisplay *gl_display;
 
 typedef enum
@@ -77,6 +87,7 @@ struct wg_parser
     GstPad *my_src;
 
     guint64 file_size, start_offset, next_offset, stop_offset;
+    GstClockTime base_pts;
     guint64 next_pull_offset;
     gchar *uri;
     gboolean is_web_scheme;
@@ -86,7 +97,7 @@ struct wg_parser
     pthread_mutex_t mutex;
 
     pthread_cond_t init_cond;
-    bool output_compressed;
+    bool output_compressed, pts_rebased;
     bool no_more_pads, has_duration, error;
     bool err_on, warn_on;
 
@@ -128,7 +139,8 @@ struct wg_parser_stream
     GstBuffer *buffer;
     GstMapInfo map_info;
 
-    bool flushing, eos, enabled, has_tags, has_buffer, no_more_pads, fix_align, get_buffer_called;
+    bool flushing, eos, enabled, has_tags, has_buffer, has_initial_gap, no_more_pads, get_buffer_called;
+    bool fix_align;
 
     uint64_t duration;
     gchar *tags[WG_PARSER_TAG_COUNT];
@@ -148,10 +160,17 @@ static bool caps_is_compressed(GstCaps *caps)
 {
     struct wg_format format;
 
-    if (!caps)
+    if (!caps || gst_caps_is_empty(caps) || gst_caps_is_any(caps))
         return false;
+
     wg_format_from_caps(&format, caps);
 
+    /* Caps with no wg_format mapping (asfreader advertises container-level
+     * "video/x-ms-asf" on its stream pads) are *not* compressed payload: the
+     * container demuxer keeps going on its own. Treating them as compressed
+     * used to spawn a nested decodebin per stream, whose first decoded pad
+     * (audio) then claimed the stream's single my_sink, so the video branch
+     * could never be linked and playback ended up with sound but no picture. */
     return format.major_type != WG_MAJOR_TYPE_UNKNOWN
             && format.major_type != WG_MAJOR_TYPE_VIDEO
             && format.major_type != WG_MAJOR_TYPE_AUDIO;
@@ -389,8 +408,18 @@ static NTSTATUS wg_parser_stream_get_buffer(void *args)
      * that this will need modification to wg_parser_stream_notify_qos() as
      * well. */
 
+    /* Because mpegpsdemux reports a non-zero PTS for the earliest buffer among
+     * all streams, we rebase the PTS by subtracting base_pts so that our
+     * stream starts at zero for the MPEG-I Splitter in quartz. */
+
     if ((wg_buffer->has_pts = GST_BUFFER_PTS_IS_VALID(buffer)))
-        wg_buffer->pts = GST_BUFFER_PTS(buffer) / 100;
+    {
+        if (parser->pts_rebased && GST_CLOCK_TIME_IS_VALID(parser->base_pts))
+            wg_buffer->pts = GST_BUFFER_PTS(buffer) >= parser->base_pts
+                    ? (GST_BUFFER_PTS(buffer) - parser->base_pts) / 100 : 0;
+        else
+            wg_buffer->pts = GST_BUFFER_PTS(buffer) / 100;
+    }
     if ((wg_buffer->has_duration = GST_BUFFER_DURATION_IS_VALID(buffer)))
         wg_buffer->duration = GST_BUFFER_DURATION(buffer) / 100;
     wg_buffer->discontinuity = GST_BUFFER_FLAG_IS_SET(buffer, GST_BUFFER_FLAG_DISCONT);
@@ -595,6 +624,56 @@ static GstAutoplugSelectResult autoplug_select_cb(GstElement *bin, GstPad *pad,
     {
         GST_INFO("Skipping \"Proton video converter\".");
         return GST_AUTOPLUG_SELECT_SKIP;
+    }
+    if (wg_env_enabled("WINE_GST_NO_HWDEC")
+            && strstr(klass, GST_ELEMENT_FACTORY_KLASS_DECODER)
+            && gst_element_factory_get_static_pad_templates(fact))
+    {
+        const GList *entry;
+
+        /* Hardware decoders emit device-memory surfaces, advertised as
+         * "memory:VASurface" / "memory:GLMemory" / "memory:D3D11Memory".
+         * Software decoders (avdec_*) only produce system-memory video/x-raw.
+         * reject the former so decodebin falls back to the latter.
+         *
+         * The factory owns the template list. Each caps reference belongs to us. */
+        for (entry = gst_element_factory_get_static_pad_templates(fact);
+                entry; entry = entry->next)
+        {
+            GstStaticPadTemplate *pad_template = entry->data;
+            GstCaps *template_caps;
+            guint i;
+
+            if (pad_template->direction != GST_PAD_SRC
+                    || !(template_caps = gst_static_pad_template_get_caps(pad_template)))
+                continue;
+
+            for (i = 0; i < gst_caps_get_size(template_caps); ++i)
+            {
+                GstCapsFeatures *features = gst_caps_get_features(template_caps, i);
+                static const char *const hw_memories[] =
+                {
+                    "memory:VASurface", "memory:GLMemory", "memory:D3D11Memory",
+                    "memory:EGLImage", "memory:DMABuf", "memory:QSV",
+                };
+                guint j;
+
+                if (!features || gst_caps_features_contains(features,
+                        GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY))
+                    continue;
+                for (j = 0; j < ARRAY_SIZE(hw_memories); ++j)
+                {
+                    if (gst_caps_features_contains(features, hw_memories[j]))
+                    {
+                        GST_WARNING("WINE_GST_NO_HWDEC: skipping \"%s\" (%s).",
+                                name, hw_memories[j]);
+                        gst_caps_unref(template_caps);
+                        return GST_AUTOPLUG_SELECT_SKIP;
+                    }
+                }
+            }
+            gst_caps_unref(template_caps);
+        }
     }
 
     if (!parser->sink_caps && strstr(klass, GST_ELEMENT_FACTORY_KLASS_DEMUXER))
@@ -819,12 +898,22 @@ static gboolean sink_event_cb(GstPad *pad, GstObject *parent, GstEvent *event)
             }
 
             pthread_mutex_lock(&parser->mutex);
-            stream->current_caps = gst_caps_ref(caps);
+            gst_caps_replace(&stream->current_caps, caps);
             stream->fix_align = fix_nv12 || fix_yv12;
             pthread_mutex_unlock(&parser->mutex);
             pthread_cond_signal(&parser->init_cond);
             break;
         }
+
+        case GST_EVENT_GAP:
+            pthread_mutex_lock(&parser->mutex);
+            if (!stream->has_buffer && !stream->has_initial_gap)
+            {
+                stream->has_initial_gap = true;
+                pthread_cond_signal(&parser->init_cond);
+            }
+            pthread_mutex_unlock(&parser->mutex);
+            break;
 
         case GST_EVENT_TAG:
             pthread_mutex_lock(&parser->mutex);
@@ -935,6 +1024,16 @@ static GstFlowReturn sink_chain_cb(GstPad *pad, GstObject *parent, GstBuffer *bu
     if (!stream->has_buffer)
     {
         stream->has_buffer = true;
+
+        /* Keep the earliest PTS for adjusting. */
+        if (parser->pts_rebased && !stream->has_initial_gap && GST_BUFFER_PTS_IS_VALID(buffer)
+                && GST_BUFFER_PTS(buffer) < parser->base_pts)
+        {
+            parser->base_pts = GST_BUFFER_PTS(buffer);
+            GST_LOG("Updated base PTS to %" GST_TIME_FORMAT ".",
+                    GST_TIME_ARGS(parser->base_pts));
+        }
+
         pthread_cond_signal(&parser->init_cond);
     }
 
@@ -1118,6 +1217,12 @@ static void free_stream(struct wg_parser_stream *stream)
         if (stream->tags[i])
             g_free(stream->tags[i]);
     }
+
+    if (stream->codec_caps)
+        gst_caps_unref(stream->codec_caps);
+    if (stream->current_caps)
+        gst_caps_unref(stream->current_caps);
+
     free(stream);
 }
 
@@ -1129,7 +1234,8 @@ static bool stream_create_post_processing_elements(GstPad *pad, struct wg_parser
     GstCaps *caps;
 
     caps = gst_pad_query_caps(pad, NULL);
-    name = gst_structure_get_name(gst_caps_get_structure(caps, 0));
+    name = gst_caps_is_empty(caps) || gst_caps_is_any(caps) ? ""
+            : g_intern_string(gst_structure_get_name(gst_caps_get_structure(caps, 0)));
     gst_caps_unref(caps);
 
     if (!strcmp(name, "video/x-raw") && parser->use_opengl)
@@ -1278,11 +1384,26 @@ static void stream_decodebin_pad_added_cb(GstElement *element, GstPad *pad, gpoi
 {
     struct wg_parser_stream *stream = user;
     struct wg_parser *parser = stream->parser;
+    GstPad *peer;
 
     GST_LOG("stream %p, parser %p, element %p, pad %p.", stream, parser, element, pad);
 
     if (gst_pad_is_linked(pad))
         return;
+
+    /* my_sink is the stream's single downstream entry point. Once the
+     * post-processing chain of a previously decoded pad has been linked to it,
+     * a further pad from this decodebin can no longer be routed there; calling
+     * link_element_to_sink() again would trip the "GST_PAD_PEER (pad) == NULL"
+     * assertion inside gst_element_get_compatible_pad() and drop the branch
+     * silently. Bail out early instead, so the loss is at least visible. */
+    if ((peer = gst_pad_get_peer(stream->my_sink)))
+    {
+        gst_object_unref(peer);
+        GST_WARNING("my_sink of stream %u is already linked, ignoring pad %p.",
+                stream->number, pad);
+        return;
+    }
 
     if (!stream_create_post_processing_elements(pad, stream))
         return;
@@ -1605,6 +1726,30 @@ static gboolean src_query_cb(GstPad *pad, GstObject *parent, GstQuery *query)
         {
             const char *live = getenv("WINE_ENABLE_GST_LIVE_LATENCY");
             gst_query_set_latency(query, live && !strcmp(live, "1"), 0, 0);
+            return TRUE;
+        }
+
+        case GST_QUERY_CAPS:
+        {
+            /* my_src is the downstream-facing pad: elements below us (decodebin,
+             * parsers) ask it which caps we can produce.  Answer with what our
+             * upstream side accepts, otherwise negotiation stalls forever. */
+            GstCaps *caps, *filter;
+
+            gst_query_parse_caps(query, &filter);
+            if (!(caps = gst_pad_get_pad_template_caps(parser->my_src)))
+                return FALSE;
+
+            if (filter)
+            {
+                GstCaps *temp = gst_caps_intersect_full(filter, caps, GST_CAPS_INTERSECT_FIRST);
+                gst_caps_unref(caps);
+                caps = temp;
+            }
+
+            GST_LOG("Responding caps query with %" GST_PTR_FORMAT ".", caps);
+            gst_query_set_caps_result(query, caps);
+            gst_caps_unref(caps);
             return TRUE;
         }
 
@@ -2025,8 +2170,9 @@ static NTSTATUS wg_parser_connect(void *args)
         struct wg_parser_stream *stream = parser->streams[i];
         gint64 duration;
 
-        /* If we received a buffer, waiting for tags or caps does not make sense anymore. */
-        while ((!stream->current_caps || !stream->has_tags) && !parser->error && !stream->has_buffer)
+        /* Rebased streams need a first buffer or gap to determine the common PTS origin. */
+        while (!parser->error && !stream->eos && !stream->has_buffer && !stream->has_initial_gap
+                && (parser->pts_rebased || !stream->current_caps || !stream->has_tags))
             pthread_cond_wait(&parser->init_cond, &parser->mutex);
 
         /* GStreamer doesn't actually provide any guarantees about when duration
@@ -2241,7 +2387,10 @@ static NTSTATUS wg_parser_create(void *args)
 
     if (!(parser = calloc(1, sizeof(*parser))))
         return E_OUTOFMEMORY;
-    if ((parser->use_opengl = params->use_opengl && gl_display))
+    if (wg_env_enabled("WINE_GST_NO_GL"))
+        GST_INFO("WINE_GST_NO_GL is set, disabling OpenGL post-processing.");
+    if ((parser->use_opengl = !wg_env_enabled("WINE_GST_NO_GL")
+            && !!(params->flags & WG_PARSER_CREATE_FLAG_USE_OPENGL) && gl_display))
     {
         if ((parser->context = gst_context_new(GST_GL_DISPLAY_CONTEXT_TYPE, false)))
             gst_context_set_gl_display(parser->context, gl_display);
@@ -2262,9 +2411,11 @@ static NTSTATUS wg_parser_create(void *args)
     pthread_cond_init(&parser->init_cond, NULL);
     pthread_cond_init(&parser->read_cond, NULL);
     pthread_cond_init(&parser->read_done_cond, NULL);
-    parser->output_compressed = params->output_compressed;
+    parser->output_compressed = params->flags & WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED;
+    parser->pts_rebased = params->flags & WG_PARSER_CREATE_FLAG_PTS_REBASED;
     parser->err_on = params->err_on;
     parser->warn_on = params->warn_on;
+    parser->base_pts = GST_CLOCK_TIME_NONE;
     GST_DEBUG("Created winegstreamer parser %p.", parser);
     params->parser = (wg_parser_t)(ULONG_PTR)parser;
     return S_OK;

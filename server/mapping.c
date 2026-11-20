@@ -39,6 +39,7 @@
 #include "windef.h"
 #include "winternl.h"
 #include "ddk/wdm.h"
+#include "wine/tgmux_emulator.h"
 
 #include "file.h"
 #include "handle.h"
@@ -298,7 +299,8 @@ void init_memory(void)
 {
     host_page_mask = sysconf( _SC_PAGESIZE ) - 1;
     free_map_addr( 0x60000000, 0x1c000000 );
-    free_available_high_map_addr( 0x600000000000, 0x100000000000 );
+    if (wine_emulator_detected()) free_available_high_map_addr( 0x4000000000, 0x1000000000 );
+    else free_available_high_map_addr( 0x600000000000, 0x100000000000 );
 }
 
 static void ranges_dump( struct object *obj, int verbose )

@@ -1606,7 +1606,7 @@ static BOOL build_native_mime_types(struct list *mime_types)
     if (_wgetenv( L"WINE_HOST_XDG_DATA_DIRS" ))
         dirs = xwcsdup( _wgetenv( L"WINE_HOST_XDG_DATA_DIRS" ));
     else
-        dirs = xwcsdup( L"/usr/local/share/:/usr/share/" );
+        dirs = xwcsdup( L"/data/data/com.termux/files/usr/glibc/local/share:/data/data/com.termux/files/usr/glibc/share" );
 
     ret = add_mimes(xdg_data_dir, mime_types);
     if (ret)

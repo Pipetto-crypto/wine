@@ -155,7 +155,7 @@ struct wg_format
          * H264: width, height, fps_n, fps_d, profile, level, codec_data_len, codec_data.
          * WMV: width, height, fps_n, fps_d, codec_data_len, codec_data.
          * INDEO: width, height, fps_n, fps_d, version.
-         * MPEG1: width, height, fps_n, fps_d. */
+         * MPEG1: width, height, fps_n, fps_d, codec_data_len, codec_data. */
         struct
         {
             wg_video_format format;
@@ -169,7 +169,7 @@ struct wg_format
             uint32_t level;
             uint32_t version;
             uint32_t codec_data_len;
-            unsigned char codec_data[64];
+            unsigned char codec_data[140]; /* =MAX_SIZE_MPEG1_SEQUENCE_INFO */
         } video;
     } u;
 };
@@ -219,11 +219,18 @@ struct wg_init_gstreamer_params
     UINT8 err_on;
 };
 
+enum wg_parser_create_flag
+{
+    WG_PARSER_CREATE_FLAG_NONE = 0,
+    WG_PARSER_CREATE_FLAG_OUTPUT_COMPRESSED = 1,
+    WG_PARSER_CREATE_FLAG_PTS_REBASED = 2,
+    WG_PARSER_CREATE_FLAG_USE_OPENGL = 4,
+};
+
 struct wg_parser_create_params
 {
     wg_parser_t parser;
-    UINT8 output_compressed;
-    UINT8 use_opengl;
+    UINT32 flags;
     UINT8 err_on;
     UINT8 warn_on;
 };

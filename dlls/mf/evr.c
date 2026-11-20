@@ -30,6 +30,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
 
+static BOOL CALLBACK dump_window_cb(HWND hwnd, LPARAM lparam);
+
 enum video_renderer_flags
 {
     EVR_SHUT_DOWN = 0x1,
@@ -398,6 +400,15 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
 
     TRACE("%p, %p.\n", iface, sample);
 
+    {
+        static int diag_samples;
+
+        if (diag_samples++ < 3)
+            WARN("ProcessSample reached the video sink, sample %p, state %u, flags %#x, clock %p.\n",
+                    sample, stream->parent ? stream->parent->state : 0xffffffff,
+                    stream->flags, stream->parent ? stream->parent->clock : NULL);
+    }
+
     EnterCriticalSection(&stream->cs);
 
     if (!stream->parent)
@@ -416,12 +427,47 @@ static HRESULT WINAPI video_stream_sink_ProcessSample(IMFStreamSink *iface, IMFS
             stream->flags |= EVR_STREAM_STARTED;
         }
 
-        if (SUCCEEDED(IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0)))
         {
-            while ((hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0)) == MF_E_TRANSFORM_TYPE_NOT_SET)
+            static unsigned int diag_count;
+            HRESULT input_hr;
+
+            /* Dump the process windows again once playback is well under way.
+             * The dump taken when the renderer receives its first event only
+             * shows the game window, so a window created later is invisible
+             * to it. */
+            if (++diag_count == 200)
             {
-                if (FAILED(hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))
-                    break;
+                WARN("Dumping windows 200 samples in.\n");
+                EnumWindows(dump_window_cb, 0);
+            }
+
+            input_hr = IMFTransform_ProcessInput(stream->parent->mixer, stream->id, sample, 0);
+
+            if (FAILED(input_hr))
+            {
+                static int diag_input_fail;
+
+                if (diag_input_fail++ < 3)
+                    WARN("Mixer refused input %u, hr %#lx.\n", stream->id, input_hr);
+            }
+
+            if (SUCCEEDED(input_hr))
+            {
+                hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0);
+                while (hr == MF_E_TRANSFORM_TYPE_NOT_SET)
+                {
+                    if (FAILED(hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_INVALIDATEMEDIATYPE, 0)))
+                        break;
+                    hr = IMFVideoPresenter_ProcessMessage(stream->parent->presenter, MFVP_MESSAGE_PROCESSINPUTNOTIFY, 0);
+                }
+
+                {
+                    static int diag_notify;
+
+                    if (diag_notify++ < 3)
+                        WARN("ProcessMessage PROCESSINPUTNOTIFY returned %#lx, presenter %p.\n",
+                                hr, stream->parent->presenter);
+                }
             }
         }
 
@@ -1527,6 +1573,8 @@ static HRESULT WINAPI video_renderer_preroll_NotifyPreroll(IMFMediaSinkPreroll *
 
     TRACE("%p, %s.\n", iface, debugstr_time(start_time));
 
+    WARN("NotifyPreroll: start_time %s, stream_count %u.\n", debugstr_time(start_time), renderer->stream_count);
+
     EnterCriticalSection(&renderer->cs);
     if (renderer->flags & EVR_SHUT_DOWN)
         hr = MF_E_SHUTDOWN;
@@ -1611,7 +1659,12 @@ static HRESULT video_renderer_create_presenter(struct video_renderer *renderer, 
     HRESULT hr;
 
     if (attributes && SUCCEEDED(IMFAttributes_GetUINT64(attributes, &MF_ACTIVATE_VIDEO_WINDOW, &value)))
+    {
         renderer->window = UlongToHandle(value);
+        WARN("create_presenter: MF_ACTIVATE_VIDEO_WINDOW -> %p.\n", renderer->window);
+    }
+    else
+        WARN("create_presenter: no MF_ACTIVATE_VIDEO_WINDOW attribute, attributes %p.\n", attributes);
 
     if (attributes && SUCCEEDED(IMFAttributes_GetUnknown(attributes, &MF_ACTIVATE_CUSTOM_VIDEO_PRESENTER_ACTIVATE,
             &IID_IMFActivate, (void **)&activate)))
@@ -1706,6 +1759,9 @@ static HRESULT video_renderer_configure_presenter(struct video_renderer *rendere
     if (SUCCEEDED(IMFVideoPresenter_QueryInterface(renderer->presenter, &IID_IMFVideoDisplayControl, (void **)&control)))
     {
         GetClientRect(renderer->window, &rect);
+
+        WARN("configure_presenter: renderer window %p, client rect %s.\n",
+                renderer->window, wine_dbgstr_rect(&rect));
 
         if (SUCCEEDED(hr = IMFVideoDisplayControl_SetVideoWindow(control, renderer->window)))
             hr = IMFVideoDisplayControl_SetVideoPosition(control, NULL, &rect);
@@ -1929,6 +1985,8 @@ static HRESULT WINAPI video_renderer_clock_sink_OnClockStart(IMFClockStateSink *
     EnterCriticalSection(&renderer->cs);
 
     state = renderer->state;
+
+    WARN("OnClockStart: previous state %u.\n", state);
 
     /* Update sink state before sending sample requests, to avoid potentially receiving new sample in stopped state */
     renderer->state = EVR_STATE_RUNNING;
@@ -2277,6 +2335,27 @@ static ULONG WINAPI video_renderer_event_sink_Release(IMediaEventSink *iface)
     return IMFMediaSink_Release(&renderer->IMFMediaSink_iface);
 }
 
+static BOOL CALLBACK dump_window_cb(HWND hwnd, LPARAM lparam)
+{
+    WCHAR class[64], title[64];
+    RECT rect;
+    DWORD pid = 0;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+
+    GetClassNameW(hwnd, class, ARRAY_SIZE(class));
+    GetWindowTextW(hwnd, title, ARRAY_SIZE(title));
+    GetWindowRect(hwnd, &rect);
+
+    WARN("window %p class %s title %s rect %s visible %d parent %p.\n",
+            hwnd, debugstr_w(class), debugstr_w(title), wine_dbgstr_rect(&rect),
+            IsWindowVisible(hwnd), GetParent(hwnd));
+
+    return TRUE;
+}
+
 static HRESULT WINAPI video_renderer_event_sink_Notify(IMediaEventSink *iface, LONG event, LONG_PTR param1, LONG_PTR param2)
 {
     struct video_renderer *renderer = impl_from_IMediaEventSink(iface);
@@ -2284,6 +2363,17 @@ static HRESULT WINAPI video_renderer_event_sink_Notify(IMediaEventSink *iface, L
     unsigned int idx;
 
     TRACE("%p, %ld, %Id, %Id.\n", iface, event, param1, param2);
+
+    {
+        static BOOL dumped;
+
+        if (!dumped)
+        {
+            dumped = TRUE;
+            WARN("Dumping top-level windows of this process.\n");
+            EnumWindows(dump_window_cb, 0);
+        }
+    }
 
     EnterCriticalSection(&renderer->cs);
 
@@ -2309,6 +2399,12 @@ static HRESULT WINAPI video_renderer_event_sink_Notify(IMediaEventSink *iface, L
         for (idx = 0; idx < renderer->stream_count; ++idx)
             IMFMediaEventQueue_QueueEventParamVar(renderer->streams[idx]->event_queue,
                     MEStreamSinkDeviceChanged, &GUID_NULL, S_OK, NULL);
+    }
+    else if (event == EC_PROCESSING_LATENCY)
+    {
+        /* The presenter reports how long it needs to render a frame. Nothing
+         * for the renderer to do with it, but it is a defined event and must
+         * not be reported as unhandled on every frame. */
     }
     else if (event >= EC_USER)
     {

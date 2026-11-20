@@ -1129,6 +1129,7 @@ void * WINAPI Wow64AllocateTemp( SIZE_T size )
 {
     struct mem_header *mem;
 
+    if (size > ~(SIZE_T)0 - offsetof( struct mem_header, data )) return NULL;
     if (!(mem = RtlAllocateHeap( GetProcessHeap(), 0, offsetof( struct mem_header, data[size] ))))
         return NULL;
     mem->next = NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST];

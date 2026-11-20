@@ -44,6 +44,7 @@
 #include "handle.h"
 #include "request.h"
 #include "fsync.h"
+#include "wine/tgmux_fsync.h"
 
 #include "pshpack4.h"
 #include "poppack.h"
@@ -65,6 +66,7 @@ int fsync_check_support(void)
 }
 
 static char shm_name[29];
+static const char *shm_dir;
 static int shm_fd;
 static off_t shm_size;
 static void **shm_addrs;
@@ -81,7 +83,7 @@ static uint32_t shm_idx_free_search_start_hint;
 static void shm_cleanup(void)
 {
     close( shm_fd );
-    if (shm_unlink( shm_name ) == -1)
+    if (tgmux_fsync_shm( shm_dir, shm_name, -1, 0 ) == -1)
         perror( "shm_unlink" );
 }
 
@@ -97,19 +99,21 @@ void fsync_init(void)
     else
         sprintf( shm_name, "/wine-%lx-fsync", (unsigned long)st.st_ino );
 
-    if (!shm_unlink( shm_name ))
+    shm_dir = tgmux_fsync_dir();
+    if (!tgmux_fsync_shm( shm_dir, shm_name, -1, 0 ))
         fprintf( stderr, "fsync: warning: a previous shm file %s was not properly removed\n", shm_name );
 
-    shm_fd = shm_open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );
+    shm_fd = tgmux_fsync_shm( shm_dir, shm_name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600 );
     if (shm_fd == -1)
-        perror( "shm_open" );
+        fatal_error( "cannot create fsync shared memory: %s\n", strerror( errno ) );
+    atexit( shm_cleanup );
 
     shm_addrs = calloc( 128, sizeof(shm_addrs[0]) );
     shm_addrs_size = 128;
 
     shm_size = FSYNC_SHM_PAGE_SIZE;
     if (ftruncate( shm_fd, shm_size ) == -1)
-        perror( "ftruncate" );
+        fatal_error( "cannot resize fsync shared memory: %s\n", strerror( errno ) );
 
     is_fsync_initialized = 1;
 
@@ -119,8 +123,6 @@ void fsync_init(void)
     shm_idx_free_map = malloc( shm_idx_free_map_size * sizeof(*shm_idx_free_map) );
     memset( shm_idx_free_map, 0xff, shm_idx_free_map_size * sizeof(*shm_idx_free_map) );
     shm_idx_free_map[0] &= ~(uint64_t)1; /* Avoid allocating shm_index 0. */
-
-    atexit( shm_cleanup );
 }
 
 static struct list mutex_list = LIST_INIT(mutex_list);

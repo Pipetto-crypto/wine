@@ -168,10 +168,11 @@ struct wined3d_decoder_vk
     struct wined3d_decoder d;
     VkVideoSessionKHR vk_session;
     uint64_t command_buffer_id;
-    struct wined3d_allocator_block *session_memory;
-    VkDeviceMemory vk_session_memory;
+    struct wined3d_video_session_memory_vk *session_memory;
+    uint32_t session_memory_count;
 
     bool distinct_dpb, layered_dpb;
+    bool session_ready;
 
     bool initialized;
 
@@ -283,18 +284,14 @@ static void wined3d_decoder_vk_get_profiles(struct wined3d_adapter *adapter, uns
 static void wined3d_decoder_vk_destroy_object(void *object)
 {
     struct wined3d_decoder_vk *decoder_vk = object;
-    struct wined3d_device_vk *device_vk = wined3d_device_vk(decoder_vk->d.device);
-    struct wined3d_vk_info *vk_info = &device_vk->vk_info;
     struct wined3d_context_vk *context_vk;
 
     TRACE("decoder_vk %p.\n", decoder_vk);
 
     context_vk = wined3d_context_vk(context_acquire(decoder_vk->d.device, NULL, 0));
 
-    if (decoder_vk->session_memory)
-        wined3d_context_vk_free_memory(context_vk, decoder_vk->session_memory);
-    else
-        VK_CALL(vkFreeMemory(device_vk->vk_device, decoder_vk->vk_session_memory, NULL));
+    wined3d_context_vk_destroy_vk_video_session_memory(context_vk, decoder_vk->vk_session,
+            decoder_vk->session_memory, decoder_vk->session_memory_count, decoder_vk->command_buffer_id);
 
     for (unsigned int i = 0; i < ARRAY_SIZE(decoder_vk->images); ++i)
     {
@@ -330,8 +327,6 @@ static void wined3d_decoder_vk_destroy_object(void *object)
                 wined3d_context_vk_destroy_image(context_vk, &image->dpb_image);
         }
     }
-
-    wined3d_context_vk_destroy_vk_video_session(context_vk, decoder_vk->vk_session, decoder_vk->command_buffer_id);
 
     free(decoder_vk);
 }
@@ -400,41 +395,61 @@ static bool wined3d_decoder_vk_create_image(struct wined3d_decoder_vk *decoder_v
     return true;
 }
 
-static void bind_video_session_memory(struct wined3d_decoder_vk *decoder_vk)
+static bool bind_video_session_memory(struct wined3d_decoder_vk *decoder_vk)
 {
     struct wined3d_adapter_vk *adapter_vk = wined3d_adapter_vk(decoder_vk->d.device->adapter);
     struct wined3d_device_vk *device_vk = wined3d_device_vk(decoder_vk->d.device);
     const struct wined3d_vk_info *vk_info = &device_vk->vk_info;
-    VkVideoSessionMemoryRequirementsKHR *requirements;
-    VkBindVideoSessionMemoryInfoKHR *memory;
+    VkVideoSessionMemoryRequirementsKHR *requirements = NULL;
+    VkBindVideoSessionMemoryInfoKHR *memory = NULL;
     struct wined3d_context_vk *context_vk;
-    uint32_t count;
+    uint32_t count, capacity, i;
     VkResult vr;
+    bool success = false;
 
     context_vk = wined3d_context_vk(context_acquire(&device_vk->d, NULL, 0));
 
-    VK_CALL(vkGetVideoSessionMemoryRequirementsKHR(device_vk->vk_device, decoder_vk->vk_session, &count, NULL));
-
-    if (!(requirements = calloc(count, sizeof(*requirements))))
+    if ((vr = VK_CALL(vkGetVideoSessionMemoryRequirementsKHR(device_vk->vk_device,
+            decoder_vk->vk_session, &count, NULL))) != VK_SUCCESS)
     {
-        context_release(&context_vk->c);
-        return;
+        ERR("Failed to query video session memory requirements, vr %s.\n", wined3d_debug_vkresult(vr));
+        goto done;
     }
 
-    for (uint32_t i = 0; i < count; ++i)
+    if (!count)
+    {
+        success = true;
+        goto done;
+    }
+
+    capacity = count;
+    if (!(requirements = calloc(capacity, sizeof(*requirements)))
+            || !(memory = calloc(capacity, sizeof(*memory)))
+            || !(decoder_vk->session_memory = calloc(capacity, sizeof(*decoder_vk->session_memory))))
+    {
+        ERR("Failed to allocate video session memory requirement records.\n");
+        goto done;
+    }
+
+    for (i = 0; i < count; ++i)
         requirements[i].sType = VK_STRUCTURE_TYPE_VIDEO_SESSION_MEMORY_REQUIREMENTS_KHR;
 
-    VK_CALL(vkGetVideoSessionMemoryRequirementsKHR(device_vk->vk_device, decoder_vk->vk_session, &count, requirements));
-
-    if (!(memory = calloc(count, sizeof(*memory))))
+    if ((vr = VK_CALL(vkGetVideoSessionMemoryRequirementsKHR(device_vk->vk_device,
+            decoder_vk->vk_session, &count, requirements))) != VK_SUCCESS)
     {
-        free(requirements);
-        context_release(&context_vk->c);
-        return;
+        ERR("Failed to retrieve video session memory requirements, vr %s.\n", wined3d_debug_vkresult(vr));
+        goto done;
+    }
+    if (count > capacity)
+    {
+        ERR("Video session memory requirement count increased during query.\n");
+        goto done;
     }
 
-    for (uint32_t i = 0; i < count; ++i)
+    for (i = 0; i < count; ++i)
     {
+        VkDeviceSize allocation_size = max(requirements[i].memoryRequirements.size,
+                requirements[i].memoryRequirements.alignment);
         unsigned int memory_type_idx;
 
         /* It's not at all clear what memory properties we should be passing
@@ -448,29 +463,42 @@ static void bind_video_session_memory(struct wined3d_decoder_vk *decoder_vk)
         if (memory_type_idx == ~0u)
         {
             ERR("Failed to find suitable memory type.\n");
-            goto out;
+            goto done;
         }
-        if (requirements[i].memoryRequirements.alignment > WINED3D_ALLOCATOR_MIN_BLOCK_SIZE)
-            ERR("Required alignment is %I64u, but we only support %u.\n",
-                    requirements[i].memoryRequirements.alignment, WINED3D_ALLOCATOR_MIN_BLOCK_SIZE);
-        decoder_vk->session_memory = wined3d_context_vk_allocate_memory(context_vk,
-                memory_type_idx, requirements[i].memoryRequirements.size, &decoder_vk->vk_session_memory);
+
+        /* Buddy allocation offsets are aligned to the allocation size. Allocate
+         * at least the requested alignment, but bind only the specified size. */
+        decoder_vk->session_memory[i].memory_block = wined3d_context_vk_allocate_memory(context_vk,
+                memory_type_idx, allocation_size, &decoder_vk->session_memory[i].vk_memory);
+        if (!decoder_vk->session_memory[i].memory_block && !decoder_vk->session_memory[i].vk_memory)
+        {
+            ERR("Failed to allocate video session memory.\n");
+            goto done;
+        }
+        decoder_vk->session_memory_count = i + 1;
 
         memory[i].sType = VK_STRUCTURE_TYPE_BIND_VIDEO_SESSION_MEMORY_INFO_KHR;
         memory[i].memoryBindIndex = requirements[i].memoryBindIndex;
-        memory[i].memory = decoder_vk->vk_session_memory;
-        memory[i].memoryOffset = decoder_vk->session_memory ? decoder_vk->session_memory->offset : 0;
+        memory[i].memory = decoder_vk->session_memory[i].vk_memory;
+        memory[i].memoryOffset = decoder_vk->session_memory[i].memory_block
+                ? decoder_vk->session_memory[i].memory_block->offset : 0;
         memory[i].memorySize = requirements[i].memoryRequirements.size;
     }
 
     if ((vr = VK_CALL(vkBindVideoSessionMemoryKHR(device_vk->vk_device,
             decoder_vk->vk_session, count, memory))) != VK_SUCCESS)
-        ERR("Failed to bind memory, vr %s.\n", wined3d_debug_vkresult(vr));
+    {
+        ERR("Failed to bind video session memory, vr %s.\n", wined3d_debug_vkresult(vr));
+        goto done;
+    }
 
-out:
+    success = true;
+
+done:
     free(requirements);
     free(memory);
     context_release(&context_vk->c);
+    return success;
 }
 
 static void wined3d_decoder_vk_cs_init(void *object)
@@ -536,7 +564,8 @@ static void wined3d_decoder_vk_cs_init(void *object)
 
     decoder_vk->bitstream_alignment = caps.minBitstreamBufferSizeAlignment;
 
-    bind_video_session_memory(decoder_vk);
+    if (!bind_video_session_memory(decoder_vk))
+        return;
 
     if (decoder_vk->layered_dpb)
     {
@@ -568,13 +597,19 @@ static void wined3d_decoder_vk_cs_init(void *object)
             view_desc.subresourceRange.layerCount = 1;
             view_desc.subresourceRange.levelCount = 1;
             if ((vr = VK_CALL(vkCreateImageView(device_vk->vk_device, &view_desc, NULL, &image->output_view))))
+            {
                 ERR("Failed to create image view, vr %s.\n", wined3d_debug_vkresult(vr));
+                return;
+            }
 
             if (decoder_vk->distinct_dpb)
             {
                 view_desc.image = decoder_vk->layered_dpb_image.vk_image;
                 if ((vr = VK_CALL(vkCreateImageView(device_vk->vk_device, &view_desc, NULL, &image->dpb_view))))
+                {
                     ERR("Failed to create image view, vr %s.\n", wined3d_debug_vkresult(vr));
+                    return;
+                }
             }
             else
             {
@@ -582,6 +617,8 @@ static void wined3d_decoder_vk_cs_init(void *object)
             }
         }
     }
+
+    decoder_vk->session_ready = true;
 }
 
 static HRESULT wined3d_decoder_vk_create(struct wined3d_device *device,
@@ -1177,6 +1214,14 @@ static void wined3d_decoder_vk_decode_h264(struct wined3d_decoder_vk *decoder_vk
     else
         wined3d_context_vk_reference_image(context_vk, &image->output_image);
 
+    if (decoder_vk->distinct_dpb)
+    {
+        if (decoder_vk->layered_dpb)
+            wined3d_context_vk_reference_image(context_vk, &decoder_vk->layered_dpb_image);
+        else
+            wined3d_context_vk_reference_image(context_vk, &image->dpb_image);
+    }
+
     init_h264_reference_info(&setup_reference_slot, &setup_reference, decoder_vk, slot_index);
 
     h264_reference = &setup_reference.h264_reference;
@@ -1263,14 +1308,24 @@ static void wined3d_decoder_vk_decode(struct wined3d_context *context, struct wi
         struct wined3d_decoder_output_view *output_view,
         unsigned int bitstream_size, unsigned int slice_control_size)
 {
-    struct wined3d_decoder_output_view_vk *output_view_vk = wined3d_decoder_output_view_vk(output_view);
+    struct wined3d_decoder_output_view_vk *output_view_vk;
     VkVideoDecodeInfoKHR decode_info = {.sType = VK_STRUCTURE_TYPE_VIDEO_DECODE_INFO_KHR};
-    unsigned int sub_resource_idx = output_view_vk->v.desc.u.texture.layer_idx;
+    unsigned int sub_resource_idx;
     struct wined3d_context_vk *context_vk = wined3d_context_vk(context);
     struct wined3d_decoder_vk *decoder_vk = wined3d_decoder_vk(decoder);
-    struct wined3d_texture *texture = output_view_vk->v.texture;
+    struct wined3d_texture *texture;
     const void *parameters, *slice_control;
     struct wined3d_bo_vk *bitstream_bo;
+
+    if (!decoder_vk->session_ready)
+    {
+        WARN("Video decoder session was not initialized successfully.\n");
+        return;
+    }
+
+    output_view_vk = wined3d_decoder_output_view_vk(output_view);
+    sub_resource_idx = output_view_vk->v.desc.u.texture.layer_idx;
+    texture = output_view_vk->v.texture;
 
     wined3d_buffer_load_location(decoder_vk->d.bitstream, &context_vk->c, WINED3D_LOCATION_BUFFER);
     bitstream_bo = wined3d_bo_vk(decoder_vk->d.bitstream->buffer_object);

@@ -1593,11 +1593,12 @@ void move_resize_window( HWND hwnd, int dir, POINT pos )
 BOOL X11DRV_ButtonPress( HWND hwnd, XEvent *xev )
 {
     XButtonEvent *event = &xev->xbutton;
-    int buttonNum = event->button - 1;
+    int buttonNum;
     struct x11drv_win_data *data;
     INPUT input;
 
-    if (buttonNum >= NB_BUTTONS) return FALSE;
+    if (!event->button || event->button > (unsigned int)NB_BUTTONS) return FALSE;
+    buttonNum = event->button - 1;
 
     TRACE( "hwnd %p/%lx button %u pos %d,%d\n", hwnd, event->window, buttonNum, event->x, event->y );
 
@@ -1626,10 +1627,12 @@ BOOL X11DRV_ButtonPress( HWND hwnd, XEvent *xev )
 BOOL X11DRV_ButtonRelease( HWND hwnd, XEvent *xev )
 {
     XButtonEvent *event = &xev->xbutton;
-    int buttonNum = event->button - 1;
+    int buttonNum;
     INPUT input;
 
-    if (buttonNum >= NB_BUTTONS || !button_up_flags[buttonNum]) return FALSE;
+    if (!event->button || event->button > (unsigned int)NB_BUTTONS) return FALSE;
+    buttonNum = event->button - 1;
+    if (!button_up_flags[buttonNum]) return FALSE;
 
     TRACE( "hwnd %p/%lx button %u pos %d,%d\n", hwnd, event->window, buttonNum, event->x, event->y );
 

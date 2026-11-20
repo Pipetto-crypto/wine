@@ -23,6 +23,7 @@
 #include "mfapi.h"
 #include "mferror.h"
 #include "dxva2api.h"
+#include "winuser.h"
 
 #include "evr_classes.h"
 #include "evr_private.h"
@@ -109,6 +110,12 @@ struct video_presenter
     LONGLONG frame_time_threshold;
     UINT reset_token;
     HWND video_window;
+    BOOL video_window_fallback;
+    /* Hidden window used as the d3d device window until the application
+     * supplies the real one through SetVideoWindow(). Creating the device
+     * against GetDesktopWindow() makes DXVK map a visible top-level window
+     * onto the desktop for a moment, which shows up as a fullscreen window
+     * flashing on screen before SetVideoWindow() arrives. */
     MFVideoNormalizedRect src_rect;
     RECT dst_rect;
     DWORD rendering_prefs;
@@ -126,6 +133,8 @@ struct video_presenter
 
     CRITICAL_SECTION cs;
 };
+
+static HRESULT video_presenter_init_d3d(struct video_presenter *presenter);
 
 static struct video_presenter *impl_from_IUnknown(IUnknown *iface)
 {
@@ -298,6 +307,15 @@ static HRESULT video_presenter_set_media_type(struct video_presenter *presenter,
 
     video_presenter_reset_media_type(presenter);
 
+    if (!presenter->allocator)
+    {
+        /* No device yet, so no allocator. Keep the type so the frame rate
+         * and the rest of the state are available once one exists. */
+        presenter->media_type = media_type;
+        IMFMediaType_AddRef(presenter->media_type);
+        return S_OK;
+    }
+
     if (SUCCEEDED(hr = IMFVideoSampleAllocator_InitializeSampleAllocator(presenter->allocator,
             presenter->allocator_capacity, media_type)))
     {
@@ -397,9 +415,13 @@ static HRESULT video_presenter_invalidate_media_type(struct video_presenter *pre
         IMFMediaType_Release(candidate_type);
 
         hr = video_presenter_configure_output_type(presenter, &aperture, media_type);
+        if (FAILED(hr))
+            WARN("Failed to configure output type %u, hr %#lx.\n", idx, hr);
 
         if (SUCCEEDED(hr))
             hr = IMFTransform_SetOutputType(presenter->mixer, 0, media_type, MFT_SET_TYPE_TEST_ONLY);
+        if (FAILED(hr))
+            WARN("Mixer rejected output type %u, hr %#lx.\n", idx, hr);
 
         if (SUCCEEDED(hr))
             hr = video_presenter_set_media_type(presenter, media_type);
@@ -504,12 +526,45 @@ static HRESULT video_presenter_get_sample_surface(IMFSample *sample, IDirect3DSu
     return hr;
 }
 
+static BOOL CALLBACK dump_present_windows_cb(HWND hwnd, LPARAM lparam)
+{
+    WCHAR class[64], title[64];
+    RECT rect;
+    DWORD pid = 0;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+
+    GetClassNameW(hwnd, class, ARRAY_SIZE(class));
+    GetWindowTextW(hwnd, title, ARRAY_SIZE(title));
+    GetWindowRect(hwnd, &rect);
+
+    WARN("present window %p class %s title %s rect %s visible %d parent %p owner %p.\n",
+            hwnd, debugstr_w(class), debugstr_w(title), wine_dbgstr_rect(&rect),
+            IsWindowVisible(hwnd), GetParent(hwnd), GetWindow(hwnd, GW_OWNER));
+
+    return TRUE;
+}
+
 static void video_presenter_sample_present(struct video_presenter *presenter, IMFSample *sample)
 {
     IDirect3DSurface9 *surface, *backbuffer;
     IDirect3DDevice9 *device;
     struct sample_queue *queue = &presenter->thread.queue;
     HRESULT hr;
+
+    {
+        static BOOL dumped;
+
+        if (!dumped)
+        {
+            dumped = TRUE;
+            WARN("Presenting into %p, dumping windows now.\n", presenter->video_window);
+            EnumWindows(dump_present_windows_cb, 0);
+
+        }
+    }
 
     if (FAILED(hr = video_presenter_get_sample_surface(sample, &surface)))
     {
@@ -522,9 +577,23 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
         if (SUCCEEDED(hr = IDirect3DSwapChain9_GetBackBuffer(presenter->swapchain, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
         {
             IDirect3DSwapChain9_GetDevice(presenter->swapchain, &device);
-            IDirect3DDevice9_StretchRect(device, surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+            hr = IDirect3DDevice9_StretchRect(device, surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+            if (FAILED(hr))
+            {
+                static int diag_stretch;
 
-            IDirect3DSwapChain9_Present(presenter->swapchain, NULL, NULL, NULL, NULL, 0);
+                if (diag_stretch++ < 3)
+                    WARN("StretchRect failed, hr %#lx, surface %p, backbuffer %p.\n", hr, surface, backbuffer);
+            }
+
+            hr = IDirect3DSwapChain9_Present(presenter->swapchain, NULL, NULL, NULL, NULL, 0);
+            if (FAILED(hr))
+            {
+                static int diag_present;
+
+                if (diag_present++ < 3)
+                    WARN("SwapChain Present failed, hr %#lx.\n", hr);
+            }
             presenter->frame_stats.presented++;
 
             IDirect3DDevice9_Release(device);
@@ -533,6 +602,8 @@ static void video_presenter_sample_present(struct video_presenter *presenter, IM
         else
             WARN("Failed to get a backbuffer, hr %#lx.\n", hr);
     }
+    else
+        WARN("No swapchain, dropping presented sample.\n");
 
     IMFSample_AddRef(sample);
     if ((sample = InterlockedExchangePointer((void **)&queue->last_presented, sample)))
@@ -574,7 +645,16 @@ static void video_presenter_check_queue(struct video_presenter *presenter,
         }
 
         if (present)
+        {
+            static int diag_present;
+
+            if (diag_present++ < 3)
+                WARN("check_queue: presenting, pts %s, clocktime %s, threshold %s.\n",
+                        wine_dbgstr_longlong(pts), wine_dbgstr_longlong(clocktime),
+                        wine_dbgstr_longlong(presenter->frame_time_threshold));
+
             video_presenter_sample_present(presenter, sample);
+        }
         else
             video_presenter_sample_queue_push(presenter, sample, TRUE);
 
@@ -600,6 +680,12 @@ static void video_presenter_schedule_sample(struct video_presenter *presenter, I
 
     if (presenter->clock)
     {
+        static int diag_sched;
+
+        if (diag_sched++ < 3)
+            WARN("schedule_sample: queueing, tid %#lx, clock %p.\n",
+                    (unsigned long)presenter->thread.tid, presenter->clock);
+
         video_presenter_sample_queue_push(presenter, sample, FALSE);
         PostThreadMessageW(presenter->thread.tid, EVRM_PRESENT, 0, 0);
     }
@@ -616,11 +702,44 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
     IMFSample *sample;
     DWORD status;
 
+    {
+        static int diag_enter;
+
+        if (diag_enter++ < 3)
+            WARN("process_input: enter, media_type %p, state %d, flags %#x, tid %#lx, clock %p.\n",
+                    presenter->media_type, presenter->state, presenter->flags,
+                    (unsigned long)presenter->thread.tid, presenter->clock);
+    }
+
     if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
         return MF_E_SHUTDOWN;
 
     if (!presenter->media_type)
+    {
+        /* The media type is normally installed by INVALIDATEMEDIATYPE, but
+         * that handshake can be missed when the mixer already has its output
+         * type. Without a media type this function silently returns and the
+         * mixer output is never pulled, so the window stays black forever.
+         * Take the type from the mixer instead of giving up. */
+        IMFMediaType *type;
+
+        if (SUCCEEDED(IMFTransform_GetOutputCurrentType(presenter->mixer, 0, &type)))
+        {
+            WARN("process_input: no media type, taking it from the mixer.\n");
+            video_presenter_set_media_type(presenter, type);
+            IMFMediaType_Release(type);
+        }
+    }
+
+    if (!presenter->media_type)
+    {
+        static int diag_no_type;
+
+        if (diag_no_type++ < 3)
+            WARN("process_input: still no media type, nothing to mix.\n");
+
         return S_OK;
+    }
 
     while (hr == S_OK)
     {
@@ -630,9 +749,12 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
         if (!(presenter->flags & PRESENTER_MIXER_HAS_INPUT))
             break;
 
+        if (!presenter->allocator)
+            break;
+
         if (FAILED(hr = IMFVideoSampleAllocator_AllocateSample(presenter->allocator, &sample)))
         {
-            WARN("Failed to allocate a sample, hr %#lx.\n", hr);
+            WARN("Failed to allocate a sample, hr %#lx, media_type %p.\n", hr, presenter->media_type);
             break;
         }
 
@@ -645,6 +767,7 @@ static HRESULT video_presenter_process_input(struct video_presenter *presenter)
         if (FAILED(hr = IMFTransform_ProcessOutput(presenter->mixer, 0, 1, &buffer, &status)))
         {
             /* FIXME: failure path probably needs to handle some errors specifically */
+            WARN("Failed to process output, hr %#lx.\n", hr);
             presenter->flags &= ~PRESENTER_MIXER_HAS_INPUT;
             IMFSample_Release(sample);
             break;
@@ -801,6 +924,7 @@ static HRESULT WINAPI video_presenter_inner_QueryInterface(IUnknown *iface, REFI
     }
     else if (IsEqualIID(riid, &IID_IMFVideoDisplayControl))
     {
+        WARN("presenter: IMFVideoDisplayControl requested.\n");
         *obj = &presenter->IMFVideoDisplayControl_iface;
     }
     else if (IsEqualIID(riid, &IID_IMFRateSupport))
@@ -1317,6 +1441,13 @@ static HRESULT WINAPI video_presenter_control_SetVideoPosition(IMFVideoDisplayCo
 
     TRACE("%p, %s, %s.\n", iface, debugstr_normalized_rect(src_rect), wine_dbgstr_rect(dst_rect));
 
+    {
+        static int diag_count;
+
+        if (diag_count++ < 5)
+            WARN("SetVideoPosition %s, video_window %p.\n", wine_dbgstr_rect(dst_rect), presenter->video_window);
+    }
+
     if (!src_rect && !dst_rect)
         return E_POINTER;
 
@@ -1438,16 +1569,48 @@ static HRESULT WINAPI video_presenter_control_SetVideoWindow(IMFVideoDisplayCont
 
     TRACE("%p, %p.\n", iface, window);
 
+    WARN("SetVideoWindow %p, is_window %d, previous %p, swapchain %p.\n", window,
+            IsWindow(window), presenter->video_window, presenter->swapchain);
+
     if (!IsWindow(window))
         return E_INVALIDARG;
 
     EnterCriticalSection(&presenter->cs);
     if (presenter->video_window != window)
     {
+        BOOL had_device_window = presenter->video_window != NULL && !presenter->video_window_fallback;
+
         if (presenter->swapchain)
             IDirect3DSwapChain9_Release(presenter->swapchain);
+        presenter->swapchain = NULL;
         presenter->video_window = window;
-        hr = video_presenter_create_swapchain(presenter);
+        presenter->video_window_fallback = FALSE;
+
+        /* The device was created before we knew the real window, so it is
+         * attached to the hidden host window. Recreate it once, now that
+         * the destination window is known, and hand the new device to the
+         * manager before building the swapchain on top of it. The device
+         * window cannot be changed after creation, and a device attached to
+         * the wrong window makes DXVK render into a separate top-level
+         * window instead of the game's. */
+        if (!had_device_window)
+        {
+            /* init_d3d() overwrites presenter->allocator without releasing
+             * the previous one, so drop it here first. */
+            if (presenter->allocator)
+            {
+                IMFVideoSampleAllocator_UninitializeSampleAllocator(presenter->allocator);
+                video_presenter_set_allocator_callback(presenter, NULL);
+                IMFVideoSampleAllocator_Release(presenter->allocator);
+                presenter->allocator = NULL;
+            }
+            hr = video_presenter_init_d3d(presenter);
+            if (FAILED(hr))
+                WARN("Failed to recreate d3d device for %p, hr %#lx.\n", window, hr);
+        }
+
+        if (SUCCEEDED(hr))
+            hr = video_presenter_create_swapchain(presenter);
     }
     LeaveCriticalSection(&presenter->cs);
 
@@ -1473,16 +1636,24 @@ static HRESULT WINAPI video_presenter_control_GetVideoWindow(IMFVideoDisplayCont
 static HRESULT WINAPI video_presenter_control_RepaintVideo(IMFVideoDisplayControl *iface)
 {
     struct video_presenter *presenter = impl_from_IMFVideoDisplayControl(iface);
-    HRESULT hr;
+    IMFSample *sample;
+    HRESULT hr = S_OK;
 
-    FIXME("%p.\n", iface);
+    TRACE("%p.\n", iface);
 
     EnterCriticalSection(&presenter->cs);
 
     if (presenter->state == PRESENTER_STATE_SHUT_DOWN)
         hr = MF_E_SHUTDOWN;
-    else
-        hr = E_NOTIMPL;
+    else if ((sample = presenter->thread.queue.last_presented))
+    {
+        /* Games that drive their own presentation loop call this on every
+         * iteration. Returning E_NOTIMPL leaves the window black after the
+         * swapchain is recreated or the desktop is invalidated. */
+        IMFSample_AddRef(sample);
+        video_presenter_sample_present(presenter, sample);
+        IMFSample_Release(sample);
+    }
 
     LeaveCriticalSection(&presenter->cs);
 
@@ -2124,12 +2295,28 @@ HRESULT WINAPI MFCreateVideoPresenter(IUnknown *owner, REFIID riid_device, REFII
     return CoCreateInstance(&CLSID_MFVideoPresenter9, owner, CLSCTX_INPROC_SERVER, riid, obj);
 }
 
+/* Create a hidden window to host the d3d device before the real video
+ * window is known. It must be a real HWND because wined3d attaches its
+ * swapchain to the device window, but it stays invisible so nothing flashes
+ * on screen. */
 static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 {
+
     D3DPRESENT_PARAMETERS present_params = { 0 };
     IDirect3DDevice9 *device;
     IDirect3D9 *d3d;
+    HWND window;
     HRESULT hr;
+
+    /* Same as upstream and Proton: fall back to the desktop window when the
+     * application has not supplied a video window yet. A private host window
+     * is not equivalent: d3d9 creates a swapchain for it and winex11 then has
+     * to create an X client window for that surface, which ends up on screen
+     * as a stray window as soon as playback starts. */
+    window = presenter->video_window ? presenter->video_window : GetDesktopWindow();
+
+    WARN("init_d3d: video_window %p, device window %p.\n",
+            presenter->video_window, window);
 
     d3d = Direct3DCreate9(D3D_SDK_VERSION);
     if (!d3d)
@@ -2140,11 +2327,11 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
 
     present_params.BackBufferCount = 1;
     present_params.SwapEffect = D3DSWAPEFFECT_COPY;
-    present_params.hDeviceWindow = GetDesktopWindow();
+    present_params.hDeviceWindow = window;
     present_params.Windowed = TRUE;
     present_params.Flags = D3DPRESENTFLAG_VIDEO;
     present_params.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
-    hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, GetDesktopWindow(),
+    hr = IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
             D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED, &present_params, &device);
 
     IDirect3D9_Release(d3d);
@@ -2163,6 +2350,21 @@ static HRESULT video_presenter_init_d3d(struct video_presenter *presenter)
     if (SUCCEEDED(hr = create_video_sample_allocator(FALSE, &IID_IMFVideoSampleAllocator, (void **)&presenter->allocator)))
     {
         hr = IMFVideoSampleAllocator_SetDirectXManager(presenter->allocator, (IUnknown *)presenter->device_manager);
+    }
+
+    /* SetVideoWindow() is not necessarily called after this point: an
+     * application that passes the window through MF_ACTIVATE_VIDEO_WINDOW, or
+     * one that never supplies a window at all, would otherwise keep
+     * presenter->swapchain NULL and every presented sample would be dropped
+     * with "No swapchain". */
+    if (SUCCEEDED(hr) && presenter->video_window)
+    {
+        HRESULT swapchain_hr = video_presenter_create_swapchain(presenter);
+
+        if (FAILED(swapchain_hr))
+            WARN("init_d3d: failed to create swapchain for %p, hr %#lx.\n", presenter->video_window, swapchain_hr);
+        else
+            WARN("init_d3d: created swapchain for window %p.\n", presenter->video_window);
     }
 
     return hr;

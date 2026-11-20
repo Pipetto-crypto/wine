@@ -1491,7 +1491,7 @@ __attribute__((used)) void* wld_start( void **stack )
         {
             /* don't warn for low 64k */
             if (preload_info[i].addr >= (void *)0x10000
-#ifdef __aarch64__
+#if 1
                 && preload_info[i].addr < (void *)0x7fffffffff /* ARM64 address space might end here*/
 #endif
             )

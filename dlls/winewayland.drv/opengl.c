@@ -111,10 +111,11 @@ static BOOL wayland_opengl_surface_create(HWND hwnd, BOOL raw, int format, struc
     gl = opengl_drawable_create(sizeof(*gl), &wayland_drawable_funcs, format, &client->client);
     client_surface_release(&client->client);
     if (!gl) return FALSE;
-    gl->base.buffer_map[0] = GL_BACK_LEFT;
-    gl->base.buffer_map[1] = GL_BACK_RIGHT;
-    gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_BACK;
-    gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_BACK;
+
+    opengl_drawable_map_buffer(&gl->base, GL_FRONT_LEFT, GL_BACK_LEFT);
+    opengl_drawable_map_buffer(&gl->base, GL_FRONT, GL_BACK);
+    opengl_drawable_map_buffer(&gl->base, GL_FRONT_AND_BACK, GL_BACK);
+    if (gl->base.stereo) opengl_drawable_map_buffer(&gl->base, GL_FRONT_RIGHT, GL_BACK_RIGHT);
 
     NtCreateEvent(&client->throttle, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, TRUE);
 

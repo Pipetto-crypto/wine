@@ -696,6 +696,47 @@ static bool transform_create_decoder_elements(struct wg_transform *transform,
 
     set_max_threads(element);
 
+    if (!strcmp(output_mime, "video/x-raw"))
+    {
+        /* The colour information of the stream is usually unknown: containers
+         * report colorimetry 0:0:0:0, and the conversion then falls back to
+         * whatever the default is, which shifts the colours of anything that
+         * is not BT.601 limited range. Tell the converter what to assume. */
+        const gchar *colorimetry = "bt709";
+        GstStructure *structure;
+        gint height = 0;
+
+        if (transform->desired_caps
+                && (structure = gst_caps_get_structure(transform->desired_caps, 0)))
+            gst_structure_get_int(structure, "height", &height);
+
+        /* SD is BT.601, anything larger is BT.709. */
+        if (height && height <= 576)
+            colorimetry = "bt601";
+
+        if ((capsfilter = create_element("capsfilter", "good")))
+        {
+            GstCaps *colorimetry_caps = gst_caps_new_simple("video/x-raw", "colorimetry",
+                    G_TYPE_STRING, colorimetry, NULL);
+
+            if (colorimetry_caps)
+            {
+                char *caps_str = gst_caps_to_string(colorimetry_caps);
+
+                if (caps_str)
+                {
+                    GST_WARNING("forcing colorimetry %s on %s", colorimetry, caps_str);
+                    gst_util_set_object_arg(G_OBJECT(capsfilter), "caps", caps_str);
+                    free(caps_str);
+                }
+                gst_caps_unref(colorimetry_caps);
+            }
+
+            if (!append_element(transform->container, capsfilter, first, last))
+                GST_WARNING("Failed to append capsfilter");
+        }
+    }
+
     ret = true;
 
 done:
@@ -1113,8 +1154,8 @@ NTSTATUS wg_transform_push_data(void *args)
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS copy_video_buffer(GstBuffer *buffer, GstVideoInfo *src_video_info,
-        GstVideoInfo *dst_video_info, struct wg_sample *sample, gsize *total_size, GstBuffer **ret_buffer)
+static NTSTATUS copy_video_buffer(GstBuffer *buffer, const GstVideoInfo *src_video_info,
+        const GstVideoInfo *dst_video_info, struct wg_sample *sample, gsize *total_size, GstBuffer **ret_buffer)
 {
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     GstVideoFrame src_frame, dst_frame;
@@ -1682,6 +1723,7 @@ static void wg_stepper_class_init(WgStepperClass *klass)
     gst_element_class_set_metadata(GST_ELEMENT_CLASS(klass), "winegstreamer buffer stepper", "Connector",
         "Hold incoming buffer for manual pushing", "Yuxuan Shui <yshui@codeweavers.com>");
     klass->parent_class.change_state = wg_stepper_change_state;
+    (void)wg_stepper_parent_class; /* silence unused variable warning */
 }
 
 static GstFlowReturn wg_stepper_chain_cb(GstPad *pad, GstObject *parent, GstBuffer *buf)

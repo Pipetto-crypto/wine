@@ -24,6 +24,9 @@
 #include "unixlib.h"
 
 #include <stdbool.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <gst/gst.h>
 #include <gst/audio/audio.h>
 
@@ -121,6 +124,8 @@ extern void wg_allocator_release_sample(GstAllocator *allocator, struct wg_sampl
 
 extern gboolean gst_element_register_winegstreamerstepper(GstPlugin *plugin);
 
+/* Marks that H.264 decoding was used, for Proton's transcode cache. No-op outside
+ * Steam environments (STEAM_COMPAT_TRANSCODED_MEDIA_PATH unset). */
 static inline void touch_h264_used_tag(void)
 {
     const char *e;
@@ -147,7 +152,9 @@ static inline void touch_h264_used_tag(void)
     }
     else
     {
-        GST_WARNING("STEAM_COMPAT_TRANSCODED_MEDIA_PATH not set, cannot create h264-used file");
+        /* Only Steam's transcode bookkeeping needs this file; its absence is
+         * the normal case when running outside a Steam container. */
+        GST_INFO("STEAM_COMPAT_TRANSCODED_MEDIA_PATH not set, cannot create h264-used file");
     }
 }
 

@@ -22,6 +22,8 @@
 
 #include "config.h"
 
+#include "wine/tgmux_paths.h"
+
 #include <stdarg.h>
 #include <stdlib.h>
 #include <dirent.h>
@@ -619,6 +621,10 @@ static void import_certs_from_path(LPCSTR path, BOOL allow_dir)
 }
 
 static const char * const CRYPT_knownLocations[] = {
+ WINE_TGMUX_PATH( "/etc/ca-certificates/extracted/tls-ca-bundle.pem" ),
+ WINE_TGMUX_PATH( "/etc/ca-certificates/cacert.pem" ),
+ WINE_TGMUX_PATH( "/etc/ssl/certs/ca-certificates.crt" ),
+ WINE_TGMUX_PATH( "/etc/ssl/certs" ),
  "/etc/ssl/certs/ca-certificates.crt",
  "/etc/ssl/certs",
  "/etc/pki/tls/certs/ca-bundle.crt",

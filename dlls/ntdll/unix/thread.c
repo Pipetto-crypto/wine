@@ -1761,6 +1761,18 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL 
         ERR_(seh)("Unhandled exception code %x flags %x addr %p\n",
                   rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress );
 
+    /* Under an x86 emulator an exception frame may be rejected by the stack
+     * check simply because guest and host stacks do not match, and a fault
+     * that the emulator already tolerated would kill an otherwise healthy
+     * process. Keep the native behaviour unchanged, but let the emulator case
+     * continue without tearing the process down. */
+    if (wine_emulator_detected())
+    {
+        WARN_(seh)("box64/emu compat: continuing after unhandled exception %x\n",
+                   (int)rec->ExceptionCode);
+        return NtContinue( context, FALSE );
+    }
+
     NtTerminateProcess( NtCurrentProcess(), rec->ExceptionCode );
     return STATUS_SUCCESS;
 }

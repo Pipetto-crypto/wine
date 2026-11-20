@@ -2053,7 +2053,7 @@ static void CALLBACK wait_pause_cb(TP_CALLBACK_INSTANCE *instance, void *context
     OAFilterState state;
     HRESULT hr;
 
-    if ((hr = IMediaControl_GetState(control, INFINITE, &state)) != S_OK)
+    if ((hr = IMediaControl_GetState(control, 100, &state)) != S_OK && hr != VFW_S_STATE_INTERMEDIATE)
         ERR("Failed to get paused state, hr %#lx.\n", hr);
 
     if (FAILED(hr = IMediaControl_Stop(control)))

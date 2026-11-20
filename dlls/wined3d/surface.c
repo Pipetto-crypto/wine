@@ -168,6 +168,39 @@ static void convert_yuy2_x8r8g8b8(const BYTE *src, BYTE *dst,
     }
 }
 
+static void convert_i420_x8r8g8b8(const BYTE *src, BYTE *dst,
+        unsigned int pitch_in, unsigned int pitch_out, unsigned int w, unsigned int h)
+{
+    /* I420 is a three plane 4:2:0 format: a full size Y plane, followed by
+     * half width and half height U and V planes. */
+    const BYTE *y_plane = src;
+    const BYTE *u_plane = y_plane + pitch_in * h;
+    const BYTE *v_plane = u_plane + (pitch_in / 2) * ((h + 1) / 2);
+    unsigned int uv_pitch = pitch_in / 2;
+    unsigned int x, y;
+
+    TRACE("Converting %ux%u pixels, pitches %u %u.\n", w, h, pitch_in, pitch_out);
+
+    for (y = 0; y < h; ++y)
+    {
+        const BYTE *y_line = y_plane + y * pitch_in;
+        const BYTE *u_line = u_plane + (y / 2) * uv_pitch;
+        const BYTE *v_line = v_plane + (y / 2) * uv_pitch;
+        DWORD *dst_line = (DWORD *)(dst + y * pitch_out);
+        for (x = 0; x < w; ++x)
+        {
+            int c = 298 * ((int) y_line[x] - 16);
+            int d = (int) u_line[x / 2] - 128;
+            int e = (int) v_line[x / 2] - 128;
+
+            dst_line[x] = 0xff000000
+                    | cliptobyte((c + 409 * e + 128) >> 8) << 16      /* red   */
+                    | cliptobyte((c - 100 * d - 208 * e + 128) >> 8) << 8     /* green */
+                    | cliptobyte((c + 516 * d + 128) >> 8);           /* blue  */
+        }
+    }
+}
+
 static void convert_yuy2_r5g6b5(const BYTE *src, BYTE *dst,
         unsigned int pitch_in, unsigned int pitch_out, unsigned int w, unsigned int h)
 {
@@ -224,6 +257,7 @@ static const struct d3dfmt_converter_desc converters[] =
     {WINED3DFMT_B8G8R8A8_UNORM, WINED3DFMT_B8G8R8X8_UNORM,  convert_a8r8g8b8_x8r8g8b8},
     {WINED3DFMT_B8G8R8X8_UNORM, WINED3DFMT_B8G8R8A8_UNORM,  convert_a8r8g8b8_x8r8g8b8},
     {WINED3DFMT_YUY2,           WINED3DFMT_B8G8R8X8_UNORM,  convert_yuy2_x8r8g8b8},
+    {WINED3DFMT_I420,           WINED3DFMT_B8G8R8X8_UNORM,  convert_i420_x8r8g8b8},
     {WINED3DFMT_YUY2,           WINED3DFMT_B5G6R5_UNORM,    convert_yuy2_r5g6b5},
 };
 

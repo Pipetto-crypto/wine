@@ -70,6 +70,7 @@
 #include "ntgdi_private.h"
 #include "wine/debug.h"
 #include "wine/list.h"
+#include "wine/tgmux_paths.h"
 
 #ifdef SONAME_LIBFREETYPE
 
@@ -1120,7 +1121,6 @@ static INT freetype_add_mem_font( void *ptr, SIZE_T size, UINT flags )
     return AddFontToList( NULL, NULL, ptr, size, flags );
 }
 
-#ifdef __ANDROID__
 static BOOL ReadFontDir(const char *dirname, BOOL external_fonts)
 {
     DIR *dir;
@@ -1161,7 +1161,6 @@ static BOOL ReadFontDir(const char *dirname, BOOL external_fonts)
     closedir(dir);
     return TRUE;
 }
-#endif
 
 #ifdef SONAME_LIBFONTCONFIG
 
@@ -1572,6 +1571,13 @@ static void freetype_load_fonts(void)
 #elif defined(__ANDROID__)
     ReadFontDir("/system/fonts", TRUE);
 #endif
+
+    /* On Termux glibc the host font set lives under the private glibc prefix
+     * (e.g. /data/data/com.termux/files/usr/glibc/share/fonts). Scan it
+     * directly so external fonts are available even when fontconfig is absent
+     * or its configuration does not list this directory. Overridable with
+     * WINE_FONT_DIR. */
+    ReadFontDir( tgmux_fontdir(), TRUE );
 }
 
 /* Some fonts have large usWinDescent values, as a result of storing signed short
@@ -3188,6 +3194,14 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
         TEXTMETRICW *ptm = &base_font->otm.otmTextMetrics;
         INT top = min( metrics.horiBearingY, ptm->tmAscent << 6 );
         INT bottom = max( metrics.horiBearingY - metrics.height, -(ptm->tmDescent << 6) );
+
+        if (top < bottom)
+        {
+            INT t = top;
+            top = bottom;
+            bottom = t;
+        }
+
         metrics.horiBearingY = top;
         metrics.height = top - bottom;
 
