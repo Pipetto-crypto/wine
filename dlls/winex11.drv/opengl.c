@@ -196,6 +196,8 @@ struct glx_pixel_format
     int         drawable_type;
     int         render_type_mask;
     int         render_type;
+    int         doublebuffer;
+    int         stereo;
     DWORD       dwFlags; /* We store some PFD_* flags in here for emulated bitmap formats */
 };
 
@@ -792,13 +794,12 @@ static int get_context_render_type( int render_type_mask )
 /* Check whether a fbconfig is suitable for Windows-style bitmap rendering */
 static BOOL check_fbconfig_bitmap_capability( const struct glx_pixel_format *format )
 {
-    int dbuf, value;
+    int value;
 
     /* Windows only supports bitmap rendering on single buffered formats. The fbconfig also needs to
      * have the GLX_PBUFFER_BIT set, because Wine's implementation of bitmap rendering uses
      * pbuffers. */
-    if (!(format->drawable_type & GLX_PBUFFER_BIT)) return FALSE;
-    if (pglXGetFBConfigAttrib( gdi_display, format->fbconfig, GLX_DOUBLEBUFFER, &dbuf ) || dbuf) return FALSE;
+    if (format->doublebuffer || !(format->drawable_type & GLX_PBUFFER_BIT)) return FALSE;
     if (format->visual && (pglXGetFBConfigAttrib( gdi_display, format->fbconfig, GLX_BUFFER_SIZE, &value ) ||
                            value != format->visual->depth)) return FALSE;
     return TRUE;
@@ -843,7 +844,9 @@ static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
 
             if (pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_FBCONFIG_ID, &fmt_id ) ||
                 pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_DRAWABLE_TYPE, &format.drawable_type ) ||
-                pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_RENDER_TYPE, &format.render_type_mask ))
+                pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_RENDER_TYPE, &format.render_type_mask ) ||
+                pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_DOUBLEBUFFER, &format.doublebuffer ) ||
+                pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_STEREO, &format.stereo ))
             {
                 WARN( "Failed to query GLX FBConfig at index %d\n", i );
                 continue;
@@ -1004,6 +1007,15 @@ static BOOL x11drv_surface_create( HWND hwnd, BOOL raw, int format, struct openg
     return TRUE;
 }
 
+/* A failed legacy PFD size query must not reuse the previous attribute's value. */
+static int get_fbconfig_pfd_size( GLXFBConfig config, int attribute )
+{
+    int value;
+
+    if (pglXGetFBConfigAttrib( gdi_display, config, attribute, &value )) return 0;
+    return value;
+}
+
 static BOOL x11drv_describe_pixel_format( int format, struct wgl_pixel_format *pf )
 {
     const struct glx_pixel_format *fmt = glx_pixel_format_from_format( format );
@@ -1039,30 +1051,27 @@ static BOOL x11drv_describe_pixel_format( int format, struct wgl_pixel_format *p
 
     if (!(pf->pfd.dwFlags & PFD_GENERIC_FORMAT)) pf->pfd.dwFlags |= PFD_SUPPORT_COMPOSITION;
 
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_DOUBLEBUFFER, &value );
-    if (value)
+    if (fmt->doublebuffer)
     {
         pf->pfd.dwFlags |= PFD_DOUBLEBUFFER;
         pf->pfd.dwFlags &= ~PFD_SUPPORT_GDI;
     }
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_STEREO, &value );
-    if (value) pf->pfd.dwFlags |= PFD_STEREO;
+    if (fmt->stereo) pf->pfd.dwFlags |= PFD_STEREO;
 
     /* Pixel type */
     if (render_type & GLX_RGBA_BIT) pf->pfd.iPixelType = PFD_TYPE_RGBA;
     else pf->pfd.iPixelType = PFD_TYPE_COLORINDEX;
 
     /* Color bits */
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_BUFFER_SIZE, &value );
-    pf->pfd.cColorBits = value;
+    pf->pfd.cColorBits = get_fbconfig_pfd_size( fmt->fbconfig, GLX_BUFFER_SIZE );
 
     /* Red, green, blue and alpha bits / shifts */
     if (pf->pfd.iPixelType == PFD_TYPE_RGBA)
     {
-        pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_RED_SIZE, &rb );
-        pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_GREEN_SIZE, &gb );
-        pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_BLUE_SIZE, &bb );
-        pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_ALPHA_SIZE, &ab );
+        rb = get_fbconfig_pfd_size( fmt->fbconfig, GLX_RED_SIZE );
+        gb = get_fbconfig_pfd_size( fmt->fbconfig, GLX_GREEN_SIZE );
+        bb = get_fbconfig_pfd_size( fmt->fbconfig, GLX_BLUE_SIZE );
+        ab = get_fbconfig_pfd_size( fmt->fbconfig, GLX_ALPHA_SIZE );
 
         pf->pfd.cBlueBits = bb;
         pf->pfd.cBlueShift = 0;
@@ -1087,10 +1096,10 @@ static BOOL x11drv_describe_pixel_format( int format, struct wgl_pixel_format *p
     }
 
     /* Accum RGBA bits */
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_ACCUM_RED_SIZE, &rb );
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_ACCUM_GREEN_SIZE, &gb );
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_ACCUM_BLUE_SIZE, &bb );
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_ACCUM_ALPHA_SIZE, &ab );
+    rb = get_fbconfig_pfd_size( fmt->fbconfig, GLX_ACCUM_RED_SIZE );
+    gb = get_fbconfig_pfd_size( fmt->fbconfig, GLX_ACCUM_GREEN_SIZE );
+    bb = get_fbconfig_pfd_size( fmt->fbconfig, GLX_ACCUM_BLUE_SIZE );
+    ab = get_fbconfig_pfd_size( fmt->fbconfig, GLX_ACCUM_ALPHA_SIZE );
 
     pf->pfd.cAccumBits = rb + gb + bb + ab;
     pf->pfd.cAccumRedBits = rb;
@@ -1099,16 +1108,13 @@ static BOOL x11drv_describe_pixel_format( int format, struct wgl_pixel_format *p
     pf->pfd.cAccumAlphaBits = ab;
 
     /* Aux bits */
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_AUX_BUFFERS, &value );
-    pf->pfd.cAuxBuffers = value;
+    pf->pfd.cAuxBuffers = get_fbconfig_pfd_size( fmt->fbconfig, GLX_AUX_BUFFERS );
 
     /* Depth bits */
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_DEPTH_SIZE, &value );
-    pf->pfd.cDepthBits = value;
+    pf->pfd.cDepthBits = get_fbconfig_pfd_size( fmt->fbconfig, GLX_DEPTH_SIZE );
 
     /* stencil bits */
-    pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_STENCIL_SIZE, &value );
-    pf->pfd.cStencilBits = value;
+    pf->pfd.cStencilBits = get_fbconfig_pfd_size( fmt->fbconfig, GLX_STENCIL_SIZE );
 
     pf->pfd.iLayerType = PFD_MAIN_PLANE;
 
