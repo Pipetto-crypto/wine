@@ -87,9 +87,10 @@ static inline const char *tgmux_localstatedir(void)
     return tgmux_env( "WINE_LOCALSTATE_DIR", WINE_TGMUX_PATH( "/var" ) );
 }
 
+/* $WINE_TZDIR, then the standard $TZDIR, then the Termux glibc zoneinfo tree. */
 static inline const char *tgmux_zonedir(void)
 {
-    return tgmux_env( "WINE_TZDIR", WINE_TGMUX_PATH( "/share/zoneinfo" ) );
+    return tgmux_env( "WINE_TZDIR", tgmux_env( "TZDIR", WINE_TGMUX_PATH( "/share/zoneinfo" ) ) );
 }
 
 /*

@@ -267,7 +267,6 @@ static ULONG_PTR system_cpu_mask;
 
 static pthread_mutex_t timezone_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static const char default_tzinfo_dir[] = "/usr/share/zoneinfo";
 static const WCHAR Time_ZonesW[] = { '\\','R','e','g','i','s','t','r','y','\\',
     'M','a','c','h','i','n','e','\\',
     'S','o','f','t','w','a','r','e','\\',
@@ -3318,11 +3317,11 @@ static BOOL get_tz_info_from_zoneinfo_name( RTL_DYNAMIC_TIME_ZONE_INFORMATION *t
         'T','Z',' ','M','a','p','p','i','n','g',
         0 };
 
-    const char *tzinfo_dir = getenv( "TZDIR" );
+    const char *tzinfo_dir = tgmux_zonedir();
     UNICODE_STRING key_name, win_name;
     WCHAR nameW[64], win_nameW[64];
     OBJECT_ATTRIBUTES attr;
-    char buf[MAX_PATH];
+    char buf[PATH_MAX];
     HANDLE key;
     BOOL ret;
     FILE *f;
@@ -3331,8 +3330,7 @@ static BOOL get_tz_info_from_zoneinfo_name( RTL_DYNAMIC_TIME_ZONE_INFORMATION *t
 
     if (strlen(name) >= ARRAY_SIZE(nameW)) return FALSE;
 
-    if (!tzinfo_dir) tzinfo_dir = default_tzinfo_dir;
-    snprintf( buf, sizeof(buf), "%s/%s", tzinfo_dir, name );
+    if (snprintf( buf, sizeof(buf), "%s/%s", tzinfo_dir, name ) >= sizeof(buf)) return FALSE;
 
     if (!(f = fopen( buf, "r" )))
     {
@@ -3361,9 +3359,9 @@ static BOOL get_tz_info_from_zoneinfo_name( RTL_DYNAMIC_TIME_ZONE_INFORMATION *t
 
 static BOOL get_system_config_tz_info( RTL_DYNAMIC_TIME_ZONE_INFORMATION *tzi, int year )
 {
-    char path[PATH_MAX];
+    char path[PATH_MAX], tzinfo_dir[PATH_MAX], localtime_path[PATH_MAX];
     const char *str;
-    int len;
+    size_t len;
 
     if ((str = getenv( "TZ" )))
     {
@@ -3371,9 +3369,13 @@ static BOOL get_system_config_tz_info( RTL_DYNAMIC_TIME_ZONE_INFORMATION *tzi, i
         return get_tz_info_from_zoneinfo_name( tzi, str, year );
     }
 
-    if (!realpath( "/etc/localtime", path )) return FALSE;
-    len = sizeof( default_tzinfo_dir ) - 1;
-    if (strncmp( path, default_tzinfo_dir, len )) return FALSE;
+    if (snprintf( localtime_path, sizeof(localtime_path), "%s/localtime", tgmux_sysconfdir() )
+        >= sizeof(localtime_path)) return FALSE;
+    /* Resolve both paths so a relocated or symlinked zoneinfo tree also matches. */
+    if (!realpath( localtime_path, path ) || !realpath( tgmux_zonedir(), tzinfo_dir )) return FALSE;
+    len = strlen( tzinfo_dir );
+    while (len && tzinfo_dir[len - 1] == '/') len--;
+    if (strncmp( path, tzinfo_dir, len )) return FALSE;
     if (path[len] != '/') return FALSE;
     return get_tz_info_from_zoneinfo_name( tzi, path + len + 1, year );
 }
