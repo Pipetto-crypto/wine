@@ -1524,14 +1524,18 @@ static void x11drv_egl_surface_flush( struct opengl_drawable *base, UINT flags )
     client_surface_present( base->client );
 }
 
-static BOOL x11drv_egl_surface_swap( struct opengl_drawable *base )
+static void x11drv_egl_swap_with_fallback( EGLSurface surface )
 {
-    struct gl_drawable *gl = impl_from_opengl_drawable( base );
+    EGLenum api = funcs->p_eglQueryAPI();
 
-    TRACE( "%s\n", debugstr_opengl_drawable( base ) );
+    /* EGL's client API is per-thread and may still default to OpenGL ES. */
+    if (api != EGL_OPENGL_API && !funcs->p_eglBindAPI( EGL_OPENGL_API ))
+    {
+        WARN( "Failed to select OpenGL for the fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
+        return;
+    }
 
-    if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ) && funcs->p_eglGetError() == EGL_BAD_SURFACE
-        && !funcs->p_eglGetCurrentContext())
+    if (!funcs->p_eglGetCurrentContext())
     {
         /* A context cannot be current on multiple threads at once. */
         pthread_mutex_lock( &egl_fallback_mutex );
@@ -1540,17 +1544,31 @@ static BOOL x11drv_egl_surface_swap( struct opengl_drawable *base )
 
         if (!egl_fallback_context)
             WARN( "Failed to create fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
-        else if (!funcs->p_eglMakeCurrent( egl->display, gl->base.surface, gl->base.surface, egl_fallback_context ))
+        else if (!funcs->p_eglMakeCurrent( egl->display, surface, surface, egl_fallback_context ))
             WARN( "Failed to bind fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
         else
         {
-            if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ))
+            if (!funcs->p_eglSwapBuffers( egl->display, surface ))
                 WARN( "Failed to swap with fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
             if (!funcs->p_eglMakeCurrent( egl->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT ))
                 WARN( "Failed to unbind fallback EGL context, error %#x.\n", funcs->p_eglGetError() );
         }
         pthread_mutex_unlock( &egl_fallback_mutex );
     }
+
+    /* EGL_NONE is an initial value, not a valid argument to eglBindAPI. */
+    if (api != EGL_OPENGL_API && api != EGL_NONE && !funcs->p_eglBindAPI( api ))
+        WARN( "Failed to restore the previous EGL client API, error %#x.\n", funcs->p_eglGetError() );
+}
+
+static BOOL x11drv_egl_surface_swap( struct opengl_drawable *base )
+{
+    struct gl_drawable *gl = impl_from_opengl_drawable( base );
+
+    TRACE( "%s\n", debugstr_opengl_drawable( base ) );
+
+    if (!funcs->p_eglSwapBuffers( egl->display, gl->base.surface ) && funcs->p_eglGetError() == EGL_BAD_SURFACE)
+        x11drv_egl_swap_with_fallback( gl->base.surface );
 
     if (InterlockedCompareExchange( &base->client->offscreen, 0, 0 ))
         XFlush( gdi_display );
