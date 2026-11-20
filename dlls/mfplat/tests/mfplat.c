@@ -4390,6 +4390,21 @@ static void test_MFCopyImage(void)
     ok(!memcmp(dest, src, 16), "Unexpected buffer contents.\n");
 }
 
+static void test_plugin_control_set_disabled(void)
+{
+    IMFPluginControl *control;
+    HRESULT hr;
+
+    hr = MFGetPluginControl(&control);
+    ok(hr == S_OK, "Failed to get plugin control, hr %#lx.\n", hr);
+    if (FAILED(hr)) return;
+
+    hr = IMFPluginControl_SetDisabled(control, 0, &GUID_NULL, TRUE);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    IMFPluginControl_Release(control);
+}
+
 static void test_MFCreateCollection(void)
 {
     IMFCollection *collection;
@@ -14087,6 +14102,7 @@ START_TEST(mfplat)
     test_allocate_queue();
     test_MFLockSharedWorkQueue();
     test_MFCopyImage();
+    test_plugin_control_set_disabled();
     test_MFCreateCollection();
     test_MFHeapAlloc();
     test_scheduled_items();
