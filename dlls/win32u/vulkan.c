@@ -3647,8 +3647,6 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
     VkSwapchainCreateInfoKHR create_info_host = *create_info;
     VkSurfaceCapabilitiesKHR capabilities;
     VkSwapchainKHR host_swapchain;
-    uint32_t format_count = 0;
-    VkSurfaceFormatKHR *formats;
     RECT client_rect;
     VkResult res;
     BOOL lite;
@@ -3734,17 +3732,35 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
     /* check if the new colorspace works with the provided format */
     if (create_info_host.imageColorSpace != create_info->imageColorSpace)
     {
+        VkSurfaceFormatKHR *formats = NULL;
+        uint32_t format_count;
         BOOL found = FALSE;
 
-        res = instance->p_vkGetPhysicalDeviceSurfaceFormatsKHR( physical_device->host.physical_device, surface->obj.host.surface, &format_count, NULL );
-
-        if (!(formats = calloc( format_count, sizeof(*formats) ))) return VK_ERROR_OUT_OF_HOST_MEMORY;
-
-        res = instance->p_vkGetPhysicalDeviceSurfaceFormatsKHR( physical_device->host.physical_device, surface->obj.host.surface, &format_count, formats );
+        do
+        {
+            free( formats );
+            formats = NULL;
+            res = instance->p_vkGetPhysicalDeviceSurfaceFormatsKHR( physical_device->host.physical_device,
+                    surface->obj.host.surface, &format_count, NULL );
+            if (res) break;
+            if (!format_count)
+            {
+                res = VK_ERROR_INITIALIZATION_FAILED;
+                break;
+            }
+            if (!(formats = calloc( format_count, sizeof(*formats) )))
+            {
+                res = VK_ERROR_OUT_OF_HOST_MEMORY;
+                break;
+            }
+            res = instance->p_vkGetPhysicalDeviceSurfaceFormatsKHR( physical_device->host.physical_device,
+                    surface->obj.host.surface, &format_count, formats );
+        } while (res == VK_INCOMPLETE);
 
         if (res)
         {
-            free(formats);
+            free( formats );
+            free( swapchain );
             return res;
         }
 
