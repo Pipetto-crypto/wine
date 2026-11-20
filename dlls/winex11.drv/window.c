@@ -1173,6 +1173,8 @@ static void window_set_net_wm_icon( struct x11drv_win_data *data, const void *ic
  */
 static void set_style_hints( struct x11drv_win_data *data, DWORD style, DWORD ex_style )
 {
+    /* Xlib expects native longs even for format 32. */
+    const unsigned long style_prop = style, ex_style_prop = ex_style;
     Window group_leader = data->whole_window;
     HWND owner = NtUserGetWindowRelative( data->hwnd, GW_OWNER );
     Window owner_win = 0;
@@ -1219,9 +1221,9 @@ static void set_style_hints( struct x11drv_win_data *data, DWORD style, DWORD ex
 
     if (!data->whole_window) return;
     XChangeProperty( data->display, data->whole_window, x11drv_atom(_WINE_HWND_STYLE), XA_CARDINAL, 32,
-                     PropModeReplace, (unsigned char *)&style, sizeof(style) / 4 );
+                     PropModeReplace, (const unsigned char *)&style_prop, 1 );
     XChangeProperty( data->display, data->whole_window, x11drv_atom(_WINE_HWND_EXSTYLE), XA_CARDINAL, 32,
-                     PropModeReplace, (unsigned char *)&ex_style, sizeof(ex_style) / 4 );
+                     PropModeReplace, (const unsigned char *)&ex_style_prop, 1 );
 }
 
 
@@ -1444,7 +1446,8 @@ static BOOL use_kwin_hacks(void)
 static void window_set_net_wm_state( struct x11drv_win_data *data, UINT new_state )
 {
     static const UINT fullscreen_mask = (1 << NET_WM_STATE_MAXIMIZED) | (1 << NET_WM_STATE_FULLSCREEN);
-    UINT i, count, old_state = data->pending_state.net_wm_state, net_wm_bypass_compositor = 0;
+    UINT i, count, old_state = data->pending_state.net_wm_state;
+    unsigned long net_wm_bypass_compositor = 0;
 
     /* Gamescope advertises _NET_WM_STATE_FULLSCREEN support but it then breaks its modeset emulation:
      * Instead of upscaling the windows, it will make them cover the entire screen, increasing their
@@ -2661,10 +2664,10 @@ static void client_window_events_disable( struct x11drv_win_data *data, Window c
     XDeleteContext( data->display, client_window, winContext );
 }
 
-static void set_wine_allow_flip( Window client_window, unsigned int allow_flip )
+static void set_wine_allow_flip( Window client_window, unsigned long allow_flip )
 {
     XChangeProperty( gdi_display, client_window, x11drv_atom(_WINE_ALLOW_FLIP), XA_CARDINAL, 32,
-                     PropModeReplace, (unsigned char *)&allow_flip, sizeof(allow_flip) / 4 );
+                     PropModeReplace, (unsigned char *)&allow_flip, 1 );
 }
 
 /**********************************************************************
@@ -2814,12 +2817,12 @@ void set_gamescope_overlay_prop( Display *display, Window window, HWND hwnd )
     ret = NtUserGetClassName( hwnd, FALSE, &class_name_str );
 
     if (ret && !wcscmp( class_name_buf, class_name )) {
-        DWORD one = 1;
+        const unsigned long one = 1;
 
         TRACE( "setting GAMESCOPE_XALIA_OVERLAY on window %lx, hwnd %p\n", window, hwnd );
 
         XChangeProperty( display, window, x11drv_atom(GAMESCOPE_XALIA_OVERLAY), XA_CARDINAL, 32,
-                         PropModeReplace, (unsigned char *)&one, sizeof(one) / 4 );
+                         PropModeReplace, (const unsigned char *)&one, 1 );
     }
 }
 
