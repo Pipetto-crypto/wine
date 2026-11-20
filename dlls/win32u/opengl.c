@@ -109,6 +109,7 @@ void *opengl_drawable_create( UINT size, const struct opengl_drawable_funcs *fun
 {
     struct opengl_drawable *drawable;
 
+    if (format <= 0 || format > formats_count) return NULL;
     if (!(drawable = calloc( 1, size ))) return NULL;
     drawable->funcs = funcs;
     drawable->ref = 1;
@@ -2358,7 +2359,9 @@ static PROC win32u_wglGetProcAddress( const char *name )
 static void win32u_get_pixel_formats( struct wgl_pixel_format *formats, UINT max_formats,
                                       UINT *num_formats, UINT *num_onscreen_formats )
 {
-    memcpy( formats, pixel_formats, min( max_formats, formats_count ) * sizeof(*pixel_formats) );
+    UINT count = min( max_formats, formats_count );
+
+    if (count) memcpy( formats, pixel_formats, count * sizeof(*pixel_formats) );
     *num_formats = formats_count;
     *num_onscreen_formats = onscreen_count;
 }
@@ -3084,6 +3087,11 @@ static BOOL win32u_wgl_context_reset( struct wgl_context *context, HDC hdc, stru
         else RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
         return FALSE;
     }
+    if (format > formats_count)
+    {
+        RtlSetLastWin32Error( ERROR_INVALID_PIXEL_FORMAT );
+        return FALSE;
+    }
     if (!driver_funcs->p_context_create( format, share_private, attribs, &context->driver_private ))
     {
         WARN( "Failed to create driver context for context %p\n", context );
@@ -3466,8 +3474,12 @@ static void display_funcs_init(void)
     init_egl_platforms( &display_funcs, driver_funcs );
 
     formats_count = driver_funcs->p_init_pixel_formats( &onscreen_count );
-    if (!(pixel_formats = malloc( formats_count * sizeof(*pixel_formats) ))) ERR( "Failed to allocate memory for pixel formats\n" );
-    else for (int i = 0; i < formats_count; i++) driver_funcs->p_describe_pixel_format( i + 1, pixel_formats + i );
+    if (formats_count && !(pixel_formats = calloc( formats_count, sizeof(*pixel_formats) )))
+    {
+        ERR( "Failed to allocate memory for pixel formats\n" );
+        formats_count = onscreen_count = 0;
+    }
+    for (int i = 0; i < formats_count; i++) driver_funcs->p_describe_pixel_format( i + 1, pixel_formats + i );
 
 #define USE_GL_FUNC(func) \
     if (!display_funcs.p_##func && !(display_funcs.p_##func = driver_funcs->p_get_proc_address( #func ))) \

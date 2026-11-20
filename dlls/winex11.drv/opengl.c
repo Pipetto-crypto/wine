@@ -813,14 +813,27 @@ static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
     GLXFBConfig* cfgs;
     XVisualInfo *visinfo;
 
-    cfgs = pglXGetFBConfigs(gdi_display, DefaultScreen(gdi_display), &nCfgs);
-    if (NULL == cfgs || 0 == nCfgs) {
-        if(cfgs != NULL) XFree(cfgs);
-        ERR("glXChooseFBConfig returns NULL\n");
+    *onscreen_count = 0;
+    cfgs = pglXGetFBConfigs( gdi_display, DefaultScreen( gdi_display ), &nCfgs );
+    if (!cfgs)
+    {
+        ERR( "glXGetFBConfigs failed\n" );
         return 0;
     }
 
-    list = calloc( 1, (nCfgs * 2) * sizeof(*list) );
+    /* Each FBConfig can yield up to two formats, counted using int indices. */
+    if (nCfgs <= 0 || nCfgs > INT_MAX / 2)
+    {
+        XFree( cfgs );
+        ERR( "Invalid number of GLX FBConfigs: %d\n", nCfgs );
+        return 0;
+    }
+    if (!(list = calloc( nCfgs * 2, sizeof(*list) )))
+    {
+        XFree( cfgs );
+        ERR( "Failed to allocate GLX pixel formats\n" );
+        return 0;
+    }
 
     /* Fill the pixel format list. Put onscreen formats at the top and offscreen ones at the bottom.
      * Do this as GLX doesn't guarantee that the list is sorted */
