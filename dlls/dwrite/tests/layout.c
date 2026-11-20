@@ -5548,6 +5548,7 @@ static void test_FontFallbackBuilder(void)
             L"zh-Hans", NULL, 7.0f);
     ok(hr == S_OK, "Failed to add mapping, hr %#lx.\n", hr);
 
+    IDWriteFontFallback_Release(fallback);
     hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
