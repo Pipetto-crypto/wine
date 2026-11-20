@@ -4308,20 +4308,6 @@ static VkResult record_artcnn_cmd( struct vulkan_device *device, struct swapchai
     return device->p_vkEndCommandBuffer( cmd );
 }
 
-#define win32u_vk_find_struct(s, t) win32u_vk_find_struct_((void *)s, VK_STRUCTURE_TYPE_##t)
-static void *win32u_vk_find_struct_(void *s, VkStructureType t)
-{
-    VkBaseOutStructure *header;
-
-    for (header = s; header; header = header->pNext)
-    {
-        if (header->sType == t)
-            return header;
-    }
-
-    return NULL;
-}
-
 static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentInfoKHR *client_present_info )
 {
     static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -4415,8 +4401,6 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
     {
         VkSubmitInfo submit_info = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
         VkPipelineStageFlags *stages;
-        VkLatencySubmissionPresentIdNV latencySubmitInfo;
-        VkPresentIdKHR *present_id;
 
         if (!(stages = mem_alloc( &pool, sizeof(VkPipelineStageFlags) * present_info->waitSemaphoreCount ))) goto failed;
         for (uint32_t i = 0; i < present_info->waitSemaphoreCount; ++i) stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
@@ -4429,15 +4413,13 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
         submit_info.pCommandBuffers = blit_cmds;
         submit_info.signalSemaphoreCount = 1;
         submit_info.pSignalSemaphores = &blit_sema;
-        device->p_vkQueueSubmit( queue->host.queue, 1, &submit_info, VK_NULL_HANDLE );
 
-        if ((queue->device->low_latency_enabled) &&
-            (present_id = win32u_vk_find_struct(present_info, PRESENT_ID_KHR)))
+        if ((res = device->p_vkQueueSubmit( queue->host.queue, 1, &submit_info, VK_NULL_HANDLE )))
         {
-            latencySubmitInfo.sType = VK_STRUCTURE_TYPE_LATENCY_SUBMISSION_PRESENT_ID_NV;
-            latencySubmitInfo.pNext = NULL;
-            latencySubmitInfo.presentID = *present_id->pPresentIds;
-            submit_info.pNext = &latencySubmitInfo;
+            WARN( "Fullscreen scaling submission failed, res %d.\n", res );
+            if (present_info->pResults)
+                for (uint32_t i = 0; i < present_info->swapchainCount; ++i) present_info->pResults[i] = res;
+            goto failed;
         }
 
         present_info->waitSemaphoreCount = 1;
