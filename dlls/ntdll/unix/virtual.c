@@ -6408,7 +6408,8 @@ static NTSTATUS get_working_set_ex( HANDLE process, LPCVOID addr,
 
     count = len / sizeof(*info);
 
-    if (count > ARRAY_SIZE(ref_buffer)) ref = malloc( count * sizeof(*ref) );
+    if (count > ARRAY_SIZE(ref_buffer) && !(ref = malloc( count * sizeof(*ref) )))
+        return STATUS_NO_MEMORY;
     for (i = 0; i < count; ++i)
     {
         ref[i].orig_index = i;

@@ -382,15 +382,17 @@ NTSTATUS WINAPI wow64_NtGetWriteWatch( UINT *args )
     ULONG *count_ptr = get_ptr( &args );
     ULONG *granularity = get_ptr( &args );
 
-    ULONG_PTR i, count = *count_ptr;
+    ULONG_PTR i, count;
     void **addresses;
     NTSTATUS status;
 
+    if (!count_ptr || !granularity) return STATUS_ACCESS_VIOLATION;
+    count = *count_ptr;
     if (!count || !size) return STATUS_INVALID_PARAMETER;
     if (flags & ~WRITE_WATCH_FLAG_RESET) return STATUS_INVALID_PARAMETER;
     if (!addr_ptr) return STATUS_ACCESS_VIOLATION;
 
-    addresses = Wow64AllocateTemp( count * sizeof(*addresses) );
+    if (!(addresses = Wow64AllocateTemp( count * sizeof(*addresses) ))) return STATUS_NO_MEMORY;
     if (!(status = NtGetWriteWatch( handle, flags, base, size, addresses, &count, granularity )))
     {
         for (i = 0; i < count; i++) addr_ptr[i] = PtrToUlong( addresses[i] );
@@ -619,7 +621,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
         MEMORY_SECTION_NAME32 *info32 = ptr;
         SIZE_T size = len + sizeof(*info) - sizeof(*info32);
 
-        info = Wow64AllocateTemp( size );
+        if (!(info = Wow64AllocateTemp( size ))) return STATUS_NO_MEMORY;
         if (!(status = NtQueryVirtualMemory( handle, addr, class, info, size, &res_len )))
         {
             info32->SectionFileName.Length = info->SectionFileName.Length;
@@ -667,7 +669,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
 
         if (len < sizeof(*info32)) return STATUS_INFO_LENGTH_MISMATCH;
 
-        info = Wow64AllocateTemp( count * sizeof(*info) );
+        if (!(info = Wow64AllocateTemp( count * sizeof(*info) ))) return STATUS_NO_MEMORY;
         for (i = 0; i < count; i++) info[i].VirtualAddress = ULongToPtr( info32[i].VirtualAddress );
         if (!(status = NtQueryVirtualMemory( handle, addr, class, info, count * sizeof(*info), &res_len )))
         {
