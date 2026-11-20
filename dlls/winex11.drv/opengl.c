@@ -1318,6 +1318,9 @@ static BOOL x11drv_pbuffer_create( HDC hdc, int format, BOOL largest, GLenum tex
     TRACE( "hdc %p, format %d, largest %u, texture_format %#x, texture_target %#x, max_level %#x, width %d, height %d, drawable %p\n",
            hdc, format, largest, texture_format, texture_target, max_level, *width, *height, drawable );
 
+    /* glXCreatePbuffer can raise BadMatch for formats without pbuffer support. */
+    if (!(fmt->drawable_type & GLX_PBUFFER_BIT)) return FALSE;
+
     glx_attribs[count++] = GLX_PBUFFER_WIDTH;
     glx_attribs[count++] = *width;
     glx_attribs[count++] = GLX_PBUFFER_HEIGHT;

@@ -241,6 +241,7 @@ static void test_pbuffers( HDC old_hdc )
 {
     int attribs[32] = { WGL_DRAW_TO_PBUFFER_ARB, 1, 0 };
     int formats[MAX_FORMATS], pbuffer_attribs[15] = {0};
+    const int draw_to_pbuffer = WGL_DRAW_TO_PBUFFER_ARB;
     unsigned int i, count, onscreen;
     unsigned int pixels[16 * 16];
     HDC hdc, pbuffer_dc, tmp_dc;
@@ -275,6 +276,17 @@ static void test_pbuffers( HDC old_hdc )
     if (count > MAX_FORMATS) count = MAX_FORMATS;
 
     wglMakeCurrent( 0, 0 );
+
+    for (i = 1; i <= onscreen; i++)
+    {
+        ret = pwglGetPixelFormatAttribivARB( hdc, i, 0, 1, &draw_to_pbuffer, &value );
+        if (!ret || value) continue;
+        pbuffer = pwglCreatePbufferARB( hdc, i, 16, 16, NULL );
+        ok( !pbuffer, "wglCreatePbufferARB returned %p for unsupported format %u\n", pbuffer, i );
+        if (pbuffer) pwglDestroyPbufferARB( pbuffer );
+        break;
+    }
+    if (i > onscreen) win_skip( "No onscreen pixel format without pbuffer support\n" );
 
     SetLastError( 0xdeadbeef );
     pbuffer = pwglCreatePbufferARB( hdc, 0, 100, 100, pbuffer_attribs );
