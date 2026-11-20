@@ -841,8 +841,19 @@ static void reserve_area( void *addr, void *end )
 static void *wine_emulator_addr_space_limit(void)
 {
     const char *env = getenv( "WINE_EMULATOR_LIMIT" );
+    unsigned long long value;
+    char *end;
 
-    if (env && *env) return (void *)(ULONG_PTR)strtoull( env, NULL, 0 );
+    if (env && *env)
+    {
+        errno = 0;
+        value = strtoull( env, &end, 0 );
+        /* Keep the bound aligned and leave room for the shared user data page. */
+        if (*env >= '0' && *env <= '9' && !errno && !*end && value <= ~(ULONG_PTR)0 &&
+            value >= (ULONG_PTR)user_shared_data + page_size && !(value & granularity_mask))
+            return (void *)(ULONG_PTR)value;
+        WARN( "Invalid WINE_EMULATOR_LIMIT %s, using the default.\n", debugstr_a( env ) );
+    }
     return (void *)0x7fffff0000;
 }
 
