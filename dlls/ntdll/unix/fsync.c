@@ -186,7 +186,7 @@ struct mutex
 };
 C_ASSERT(sizeof(struct mutex) == 16);
 
-static char shm_name[29];
+static char shm_name[TGMUX_FSYNC_NAME_SIZE];
 static int shm_fd;
 static volatile void *shm_addrs[8192];
 
@@ -470,16 +470,13 @@ void fsync_init( DWORD pid )
         exit(1);
     }
 
-    if (st.st_ino != (unsigned long)st.st_ino)
-        sprintf( shm_name, "/wine-%lx%08lx-fsync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
-    else
-        sprintf( shm_name, "/wine-%lx-fsync", (unsigned long)st.st_ino );
+    tgmux_fsync_name( shm_name, (unsigned long long)st.st_dev, (unsigned long long)st.st_ino );
 
     if ((shm_fd = tgmux_fsync_shm( tgmux_fsync_dir(), shm_name, O_RDWR | O_CLOEXEC, 0 )) == -1)
     {
         /* probably the server isn't running with WINEFSYNC, tell the user and bail */
         if (errno == ENOENT)
-            ERR("Failed to open fsync shared memory file; make sure no stale wineserver instances are running without WINEFSYNC.\n");
+            ERR("Failed to open fsync shared memory file; make sure the client and wineserver versions match and stop any stale wineserver instances.\n");
         else
             ERR("Failed to initialize shared memory: %s\n", strerror( errno ));
         exit(1);

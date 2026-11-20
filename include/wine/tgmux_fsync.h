@@ -18,6 +18,14 @@
 
 #include "wine/tgmux_paths.h"
 
+#define TGMUX_FSYNC_NAME_SIZE 64
+
+/* Match the server directory identity; inode numbers alone are not unique across devices. */
+static inline void tgmux_fsync_name( char *name, unsigned long long device, unsigned long long inode )
+{
+    snprintf( name, TGMUX_FSYNC_NAME_SIZE, "/wine-%llx-%llx-fsync", device, inode );
+}
+
 /* An explicit override must be the same for wineserver and all of its clients. */
 static inline const char *tgmux_fsync_dir(void)
 {

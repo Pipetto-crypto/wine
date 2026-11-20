@@ -7319,6 +7319,6 @@ union generic_reply
     struct fsync_free_shm_idx_reply fsync_free_shm_idx_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 934
+#define SERVER_PROTOCOL_VERSION 935
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */

@@ -65,7 +65,7 @@ int fsync_check_support(void)
 #endif
 }
 
-static char shm_name[29];
+static char shm_name[TGMUX_FSYNC_NAME_SIZE];
 static const char *shm_dir;
 static int shm_fd;
 static off_t shm_size;
@@ -94,10 +94,7 @@ void fsync_init(void)
     if (fstat( config_dir_fd, &st ) == -1)
         fatal_error( "cannot stat config dir\n" );
 
-    if (st.st_ino != (unsigned long)st.st_ino)
-        sprintf( shm_name, "/wine-%lx%08lx-fsync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
-    else
-        sprintf( shm_name, "/wine-%lx-fsync", (unsigned long)st.st_ino );
+    tgmux_fsync_name( shm_name, (unsigned long long)st.st_dev, (unsigned long long)st.st_ino );
 
     shm_dir = tgmux_fsync_dir();
     if (!tgmux_fsync_shm( shm_dir, shm_name, -1, 0 ))
