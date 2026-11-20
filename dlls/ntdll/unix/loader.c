@@ -2418,11 +2418,26 @@ static void hacks_init(void)
     }
 
     if ((env_str = getenv( "WINE_KERNEL_STACK_SIZE" )))
-        kernel_stack_size = atoll( env_str ) * 1024;
+    {
+        SIZE_T min_size = min_kernel_stack + kernel_stack_guard_size;
+        long pthread_min = PTHREAD_STACK_MIN;
+        long long size_kb;
+        char *end;
+
+        if (pthread_min > 0) min_size = max( min_size, (SIZE_T)pthread_min );
+        errno = 0;
+        size_kb = strtoll( env_str, &end, 10 );
+        /* Leave room for virtual_alloc_thread_stack() to round up to 64 KiB. */
+        if (errno || end == env_str || *end || size_kb <= 0 ||
+            (unsigned long long)size_kb > ((SIZE_T)-1 - 0xffff) / 1024 ||
+            (SIZE_T)size_kb * 1024 < min_size)
+            WARN( "Invalid WINE_KERNEL_STACK_SIZE %s, using the default.\n", debugstr_a( env_str ) );
+        else kernel_stack_size = (SIZE_T)size_kb * 1024;
+    }
     else if (sgi && !strcmp( sgi, "702700" ))
         kernel_stack_size = 200 * 1024;
     if (kernel_stack_size != 0x100000)
-        ERR( "HACK: setting kernel_stack_size to %luKB.\n", (long)(kernel_stack_size / 1024) );
+        ERR( "HACK: setting kernel_stack_size to %luKB.\n", (unsigned long)(kernel_stack_size / 1024) );
 
     if (sgi && (0
         || !strcmp(sgi, "1364780") || !strcmp(sgi, "1952120") || !strcmp(sgi, "2154900") /* Street Fighter 6 */
