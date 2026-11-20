@@ -30,6 +30,7 @@
 #include "config.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
@@ -918,6 +919,8 @@ static BOOL set_swap_interval( struct gl_drawable *gl, int interval )
 {
     BOOL ret = TRUE;
 
+    /* The absolute value of INT_MIN is not representable as an int. */
+    if (interval == INT_MIN) interval = -INT_MAX;
     if (interval < 0 && !has_swap_control_tear) interval = -interval;
 
     switch (swap_control_method)
@@ -1429,16 +1432,16 @@ static const char *x11drv_init_wgl_extensions( struct opengl_funcs *funcs )
     if (has_extension( glxExtensions, "GLX_EXT_fbconfig_packed_float"))
         register_extension("WGL_EXT_pixel_format_packed_float");
 
-    if (has_extension( glxExtensions, "GLX_EXT_swap_control"))
+    if (pglXSwapIntervalEXT && has_extension( glxExtensions, "GLX_EXT_swap_control" ))
     {
         swap_control_method = GLX_SWAP_CONTROL_EXT;
         has_swap_control_tear = has_extension( glxExtensions, "GLX_EXT_swap_control_tear" );
     }
-    else if (has_extension( glxExtensions, "GLX_MESA_swap_control"))
+    else if (pglXSwapIntervalMESA && has_extension( glxExtensions, "GLX_MESA_swap_control" ))
     {
         swap_control_method = GLX_SWAP_CONTROL_MESA;
     }
-    else if (has_extension( glxExtensions, "GLX_SGI_swap_control"))
+    else if (pglXSwapIntervalSGI && has_extension( glxExtensions, "GLX_SGI_swap_control" ))
     {
         swap_control_method = GLX_SWAP_CONTROL_SGI;
     }
