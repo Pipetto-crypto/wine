@@ -10183,12 +10183,19 @@ static void test_video_processor(BOOL use_2d_buffer)
         j = k = 0;
         while (SUCCEEDED(hr = IMFTransform_GetOutputAvailableType(transform, 0, ++j, &media_type)))
         {
+            UINT64 tmp = 0xdeadbeef;
             winetest_push_context("out %lu", j);
             ok(hr == S_OK, "GetOutputAvailableType returned %#lx\n", hr);
             check_media_type(media_type, expect_available_common, -1);
 
             hr = IMFMediaType_GetGUID(media_type, &MF_MT_SUBTYPE, &guid);
             ok(hr == S_OK, "GetGUID returned %#lx\n", hr);
+
+            hr = IMFMediaType_GetUINT64(media_type, &MF_MT_FRAME_SIZE, &tmp);
+            ok(hr == MF_E_ATTRIBUTENOTFOUND, "Unexpected frame size: %#lx %#I64x\n", hr, tmp);
+
+            hr = IMFMediaType_GetUINT64(media_type, &MF_MT_PIXEL_ASPECT_RATIO, &tmp);
+            ok(hr == MF_E_ATTRIBUTENOTFOUND, "Unexpected PAR: %#lx %#I64x\n", hr, tmp);
 
             for (; k < ARRAY_SIZE(expect_available_outputs); k++)
                 if (IsEqualGUID(&expect_available_outputs[k], &guid))
