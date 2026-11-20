@@ -2399,7 +2399,7 @@ static void test_RtlCompressBuffer(void)
 {
     ULONG compress_workspace, decompress_workspace;
     static UCHAR test_buffer[] = "WineWineWine";
-    static UCHAR buf1[0x1000], buf2[0x1000];
+    static UCHAR buf1[0x3000], buf2[0x3000], large_buffer[0x1001];
     ULONG final_size, buf_size;
     UCHAR *workspace = NULL;
     NTSTATUS status;
@@ -2431,14 +2431,20 @@ static void test_RtlCompressBuffer(void)
     ok(status == STATUS_UNSUPPORTED_COMPRESSION, "got wrong status 0x%08lx\n", status);
     ok(final_size == 0xdeadbeef, "got wrong final_size %lu\n", final_size);
 
+    final_size = 0xdeadbeef;
+    status = RtlCompressBuffer(COMPRESSION_FORMAT_LZNT1, test_buffer, sizeof(test_buffer),
+                               buf1, sizeof(buf1), 2048, &final_size, workspace);
+    ok(status == STATUS_SUCCESS, "got wrong status for chunk size 0x800: 0x%08lx\n", status);
+
     /* test compression */
     final_size = 0xdeadbeef;
     memset(buf1, 0x11, sizeof(buf1));
     status = RtlCompressBuffer(COMPRESSION_FORMAT_LZNT1, test_buffer, sizeof(test_buffer),
                                buf1, sizeof(buf1), 4096, &final_size, workspace);
     ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
-    ok((*(WORD *)buf1 & 0x7000) == 0x3000, "no chunk signature found %04x\n", *(WORD *)buf1);
-    todo_wine
+    ok((*(WORD *)buf1 & 0xf000) == 0xb000, "invalid compressed chunk header %04x\n", *(WORD *)buf1);
+    ok((*(WORD *)buf1 & 0xfff) + 1 == final_size - sizeof(WORD),
+       "wrong encoded chunk length in header %04x, size %lu\n", *(WORD *)buf1, final_size);
     ok(final_size < sizeof(test_buffer), "got wrong final_size %lu\n", final_size);
 
     /* test decompression */
@@ -2458,6 +2464,28 @@ static void test_RtlCompressBuffer(void)
     status = RtlCompressBuffer(COMPRESSION_FORMAT_LZNT1, test_buffer, sizeof(test_buffer),
                                buf1, 4, 4096, &final_size, workspace);
     ok(status == STATUS_BUFFER_TOO_SMALL, "got wrong status 0x%08lx\n", status);
+    ok(final_size == 0xdeadbeef, "final_size was modified on failure: %lu\n", final_size);
+
+    /* Verify chunk boundaries and independent decoding across the 4 KiB limit. */
+    memset(large_buffer, 'A', sizeof(large_buffer));
+    final_size = 0xdeadbeef;
+    status = RtlCompressBuffer(COMPRESSION_FORMAT_LZNT1, large_buffer, sizeof(large_buffer),
+                               buf1, sizeof(buf1), 4096, &final_size, workspace);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
+    ok(final_size > 4, "got wrong final_size %lu\n", final_size);
+    ok((*(WORD *)buf1 & 0x8000) != 0, "first chunk is not compressed: %04x\n", *(WORD *)buf1);
+    buf_size = ((*(WORD *)buf1 & 0xfff) + 1) + sizeof(WORD);
+    ok(buf_size < final_size, "missing second chunk (%lu, %lu)\n", buf_size, final_size);
+    {
+        WORD header = buf1[buf_size] | buf1[buf_size + 1] << 8;
+        ok((header & 0xf000) == 0x3000 || (header & 0xf000) == 0xb000,
+           "invalid second chunk header %04x\n", header);
+    }
+    status = RtlDecompressBuffer(COMPRESSION_FORMAT_LZNT1, buf2, sizeof(buf2),
+                                 buf1, final_size, &buf_size);
+    ok(status == STATUS_SUCCESS, "got wrong status 0x%08lx\n", status);
+    ok(buf_size == sizeof(large_buffer), "got wrong decoded size %lu\n", buf_size);
+    ok(!memcmp(buf2, large_buffer, sizeof(large_buffer)), "got wrong decoded data\n");
 
     HeapFree(GetProcessHeap(), 0, workspace);
 }

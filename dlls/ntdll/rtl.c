@@ -1101,34 +1101,97 @@ NTSTATUS WINAPI RtlGetCompressionWorkSpaceSize(USHORT format, PULONG compress_wo
     }
 }
 
-/* compress data using LZNT1, currently only a stub */
+/* compress data using LZNT1 */
 static NTSTATUS lznt1_compress(UCHAR *src, ULONG src_size, UCHAR *dst, ULONG dst_size,
                                ULONG chunk_size, ULONG *final_size, UCHAR *workspace)
 {
-    UCHAR *src_cur = src, *src_end = src + src_size;
-    UCHAR *dst_cur = dst, *dst_end = dst + dst_size;
-    ULONG block_size;
+    UCHAR compressed[0x1200];
+    ULONG src_pos = 0, dst_pos = 0;
 
-    while (src_cur < src_end)
+    (void)workspace;
+
+    /* LZNT1 chunks have a fixed 4 KiB uncompressed size. */
+    (void)chunk_size;
+
+    while (src_pos < src_size)
     {
-        /* determine size of current chunk */
-        block_size = min(0x1000, src_end - src_cur);
-        if (dst_cur + sizeof(WORD) + block_size > dst_end)
+        ULONG block_size = min(0x1000, src_size - src_pos);
+        ULONG compressed_size = 0, pos = 0;
+        BOOL use_compressed;
+        UCHAR *chunk = src + src_pos;
+
+        /* Build a token stream. Each flag byte describes the following 8 tokens. */
+        while (pos < block_size)
+        {
+            ULONG flags_pos = compressed_size++, flags = 0, bit;
+
+            for (bit = 0; bit < 8 && pos < block_size; bit++)
+            {
+                ULONG displacement_bits = 12, length_bits, max_distance, distance;
+                ULONG best_length = 0, best_distance = 0;
+
+                for (displacement_bits = 12; displacement_bits > 4; displacement_bits--)
+                    if ((1u << (displacement_bits - 1)) < pos) break;
+                length_bits = 16 - displacement_bits;
+                max_distance = min(pos, 1u << displacement_bits);
+
+                for (distance = 1; distance <= max_distance; distance++)
+                {
+                    ULONG length = 0;
+                    ULONG max_length = min(block_size - pos, (1u << length_bits) + 2);
+
+                    while (length < max_length && chunk[pos + length] == chunk[pos + length - distance])
+                        length++;
+                    if (length >= 3 && length > best_length)
+                    {
+                        best_length = length;
+                        best_distance = distance;
+                    }
+                }
+
+                /* A phrase code is worthwhile only when it replaces 3 bytes. */
+                if (best_length >= 3)
+                {
+                    WORD code = (WORD)(((best_distance - 1) << length_bits) | (best_length - 3));
+                    compressed[compressed_size++] = code;
+                    compressed[compressed_size++] = code >> 8;
+                    flags |= 1u << bit;
+                    pos += best_length;
+                }
+                else
+                {
+                    compressed[compressed_size++] = chunk[pos++];
+                }
+            }
+
+            compressed[flags_pos] = flags;
+        }
+
+        use_compressed = compressed_size < block_size;
+        if (dst_pos > dst_size || dst_size - dst_pos < sizeof(WORD) + (use_compressed ? compressed_size : block_size))
             return STATUS_BUFFER_TOO_SMALL;
 
-        /* write (uncompressed) chunk header */
-        *(WORD *)dst_cur = 0x3000 | (block_size - 1);
-        dst_cur += sizeof(WORD);
-
-        /* write chunk content */
-        memcpy(dst_cur, src_cur, block_size);
-        dst_cur += block_size;
-        src_cur += block_size;
+        if (use_compressed)
+        {
+            WORD header = 0xb000 | (compressed_size - 1);
+            dst[dst_pos] = header;
+            dst[dst_pos + 1] = header >> 8;
+            memcpy(dst + dst_pos + sizeof(WORD), compressed, compressed_size);
+            dst_pos += sizeof(WORD) + compressed_size;
+        }
+        else
+        {
+            WORD header = 0x3000 | (block_size - 1);
+            dst[dst_pos] = header;
+            dst[dst_pos + 1] = header >> 8;
+            memcpy(dst + dst_pos + sizeof(WORD), chunk, block_size);
+            dst_pos += sizeof(WORD) + block_size;
+        }
+        src_pos += block_size;
     }
 
     if (final_size)
-        *final_size = dst_cur - dst;
-
+        *final_size = dst_pos;
     return STATUS_SUCCESS;
 }
 
