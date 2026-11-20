@@ -517,7 +517,7 @@ static void X11DRV_client_surface_present( struct client_surface *client, HDC hd
         if (!NtUserGetClientRect( hwnd, &rect_dst, NtUserGetWinMonitorDpi( hwnd, MDT_WINE_RAW_DPI ) )) goto done;
         NtUserMapWindowPoints( hwnd, toplevel, (POINT *)&rect_dst, 2, NtUserGetWinMonitorDpi( hwnd, MDT_WINE_RAW_DPI ) );
     }
-    if (IsRectEmpty( &rect_dst ) || IsRectEmpty( &surface->rect )) return;
+    if (IsRectEmpty( &rect_dst ) || IsRectEmpty( &surface->rect )) goto done;
 
     if ((data = get_win_data( toplevel )))
     {
