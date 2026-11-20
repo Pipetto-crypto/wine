@@ -2650,7 +2650,7 @@ static DEVMODEW *get_virtual_modes( const DEVMODEW *initial, const DEVMODEW *max
     if (!(screen_sizes = get_screen_sizes( maximum, host_modes, host_modes_count, &sizes_count ))) return NULL;
     modes = malloc( (2 * ARRAY_SIZE(freqs) * ARRAY_SIZE(depths) * (sizes_count + 2) + 1) * sizeof(*modes) );
 
-    if ((env = getenv( "SteamAppId" )) && !strcmp( env, "403640" ))
+    if (modes && (env = getenv( "SteamAppId" )) && !strcmp( env, "403640" ))
     {
         DEVMODEW mode =
         {
