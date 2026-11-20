@@ -33,6 +33,8 @@
 #include <stdint.h>
 #endif
 
+#include "wine/tgmux_paths.h"
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "windef.h"
@@ -223,15 +225,16 @@ const struct sid *security_unix_uid_to_sid( uid_t uid )
 
 void init_user_sid(void)
 {
+    const char *machine_id_path = tgmux_machine_id();
     char machine_id[17];
     uint64_t id;
     size_t n;
     FILE *f;
 
-    f = fopen( "/etc/machine-id", "r" );
+    f = fopen( machine_id_path, "r" );
     if (!f)
     {
-        fprintf( stderr, "Failed to open /etc/machine-id, error %s.\n", strerror( errno ));
+        fprintf( stderr, "Failed to open %s, error %s.\n", machine_id_path, strerror( errno ));
         return;
     }
 
@@ -240,7 +243,7 @@ void init_user_sid(void)
 
     if (n != 16)
     {
-        fprintf( stderr, "Failed to read /etc/machine-id, error %s.\n", strerror( errno ));
+        fprintf( stderr, "Failed to read %s, error %s.\n", machine_id_path, strerror( errno ));
         return;
     }
     machine_id[n] = 0;
