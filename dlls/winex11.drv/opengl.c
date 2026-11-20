@@ -1494,7 +1494,7 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
     {
         /* Avoid setting old viewport when not needed, it may be costly in some cases. */
         funcs->p_glGetFloati_v( GL_VIEWPORT, 0, viewport );
-        if (memcmp( viewport, viewport_old, sizeof(*viewport) )) funcs->p_glViewportIndexedfv( 0, viewport_old );
+        if (memcmp( viewport, viewport_old, sizeof(viewport) )) funcs->p_glViewportIndexedfv( 0, viewport_old );
     }
 
     if (offscreen && !pglXWaitForSbcOML) XFlush( gdi_display );
