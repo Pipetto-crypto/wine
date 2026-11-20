@@ -800,6 +800,39 @@ static void test_sample_times_at_rate(IMFMediaSource *source, FLOAT rate, BOOL t
     winetest_pop_context();
 }
 
+static void test_unsupported_stream(void)
+{
+    IMFPresentationDescriptor *pd;
+    IMFMediaSource *source;
+    IMFByteStream *stream;
+    DWORD count = 0;
+    HRESULT hr;
+
+    stream = create_resource_byte_stream(L"test_unsupported_stream.mp4");
+    hr = create_source(&CLSID_MPEG4ByteStreamHandlerPlugin, stream, &source);
+    IMFByteStream_Release(stream);
+
+    if (FAILED(hr))
+    {
+        win_skip("Failed to create MP4 source with an unsupported stream, hr %#lx.\n", hr);
+        return;
+    }
+
+    hr = IMFMediaSource_CreatePresentationDescriptor(source, &pd);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        hr = IMFPresentationDescriptor_GetStreamDescriptorCount(pd, &count);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(count == 1, "Unexpected stream count %lu.\n", count);
+        IMFPresentationDescriptor_Release(pd);
+    }
+
+    hr = IMFMediaSource_Shutdown(source);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    IMFMediaSource_Release(source);
+}
+
 static void test_thinning(void)
 {
     IMFMediaSource *source;
@@ -832,6 +865,7 @@ START_TEST(mfsrcsnk)
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
 
     test_wave_sink();
+    test_unsupported_stream();
     test_thinning();
 
     hr = MFShutdown();

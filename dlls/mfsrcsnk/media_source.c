@@ -1583,7 +1583,7 @@ static HRESULT get_stream_media_type(struct winedmo_demuxer demuxer, UINT index,
     return hr;
 }
 
-static void media_source_init_stream_map(struct media_source *source, UINT stream_count)
+static UINT media_source_init_stream_map(struct media_source *source, UINT stream_count)
 {
     int i, n = 0;
     GUID major;
@@ -1599,7 +1599,7 @@ static void media_source_init_stream_map(struct media_source *source, UINT strea
             TRACE("mapping source %p stream %u to demuxer stream %u\n", source, n, i);
             source->stream_map[n++] = i;
         }
-        return;
+        return n;
     }
 
     for (i = stream_count - 1; i >= 0; i--)
@@ -1625,13 +1625,14 @@ static void media_source_init_stream_map(struct media_source *source, UINT strea
     for (i = stream_count - 1; i >= 0; i--)
     {
         if (FAILED(get_stream_media_type(source->winedmo_demuxer, i, &major, NULL)))
-            major = GUID_NULL;
+            continue;
         if (!IsEqualGUID(&major, &MFMediaType_Audio) && !IsEqualGUID(&major, &MFMediaType_Video))
         {
             TRACE("mapping source %p stream %u to demuxer stream %u\n", source, n, i);
             source->stream_map[n++] = i;
         }
     }
+    return n;
 }
 
 static HRESULT normalize_mp4_language_code(struct media_source *source, WCHAR *buffer)
@@ -1799,7 +1800,7 @@ static NTSTATUS CDECL media_source_read_cb(struct winedmo_stream *stream, BYTE *
 static HRESULT media_source_async_create(struct media_source *source, IMFAsyncResult *result)
 {
     IUnknown *state = IMFAsyncResult_GetStateNoAddRef(result);
-    UINT i, stream_count;
+    UINT i, stream_count, mapped_stream_count;
     NTSTATUS status;
     HRESULT hr;
 
@@ -1834,16 +1835,21 @@ static HRESULT media_source_async_create(struct media_source *source, IMFAsyncRe
         goto done;
     }
 
-    media_source_init_stream_map(source, stream_count);
+    mapped_stream_count = media_source_init_stream_map(source, stream_count);
+    if (!mapped_stream_count)
+    {
+        hr = MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
+        goto done;
+    }
 
-    for (i = 0; SUCCEEDED(hr) && i < stream_count; ++i)
+    for (i = 0; SUCCEEDED(hr) && i < mapped_stream_count; ++i)
     {
         IMFStreamDescriptor *descriptor;
         IMFMediaType *media_type;
         GUID major;
 
         if (FAILED(hr = get_stream_media_type(source->winedmo_demuxer, source->stream_map[i], &major, &media_type)))
-            continue;
+            break;
         if (SUCCEEDED(hr = stream_descriptor_create(i + 1, media_type, &descriptor)))
         {
             if (SUCCEEDED(hr = media_stream_create(&source->IMFMediaSource_iface, descriptor, &source->streams[i])))

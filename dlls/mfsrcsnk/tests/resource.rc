@@ -29,3 +29,7 @@
  */
 /* @makedep: test_thinning.avi */
 test_thinning.avi RCDATA test_thinning.avi
+
+/* Generated with an unsupported subtitle stream before the video stream. */
+/* @makedep: test_unsupported_stream.mp4 */
+test_unsupported_stream.mp4 RCDATA test_unsupported_stream.mp4
