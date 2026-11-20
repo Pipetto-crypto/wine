@@ -10349,19 +10349,35 @@ static void test_MFCreateDXSurfaceBuffer(void)
 
     hr = IDirect3DSurface9_LockRect(backbuffer, &locked_rect, NULL, 0);
     ok(hr == S_OK, "Failed to lock back buffer, hr %#lx.\n", hr);
+    if (SUCCEEDED(hr))
+        *(DWORD *)locked_rect.pBits = 0x12345678;
 
     /* Cannot lock while the surface is locked. */
     hr = IMFMediaBuffer_Lock(buffer, &data, NULL, &length);
     ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#lx.\n", hr);
 
+    /* A failed lock must not leave an allocated buffer behind. */
+    hr = IMFMediaBuffer_Lock(buffer, &data, NULL, &length);
+    ok(hr == D3DERR_INVALIDCALL, "Unexpected hr %#lx.\n", hr);
+    if (SUCCEEDED(hr))
+        IMFMediaBuffer_Unlock(buffer);
+
     hr = IDirect3DSurface9_UnlockRect(backbuffer);
     ok(hr == S_OK, "Failed to unlock back buffer, hr %#lx.\n", hr);
 
+    /* The retry must copy the pixels from the surface. */
+    data = NULL;
     hr = IMFMediaBuffer_Lock(buffer, &data, NULL, &length);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     /* Broken on Windows 8 and 10 v1507 */
     broken_test = length == 0;
     ok(length == max_length || broken(broken_test), "Unexpected length %lu instead of %lu.\n", length, max_length);
+    ok(!!data || broken(broken_test), "No data from the successful lock.\n");
+    if (data && !broken(broken_test))
+    {
+        color = *(DWORD *)data;
+        ok(color == 0x12345678, "Unexpected leading dword %#lx.\n", color);
+    }
 
     /* You can lock the surface while the media buffer is locked. */
     hr = IDirect3DSurface9_LockRect(backbuffer, &locked_rect, NULL, 0);
@@ -11074,6 +11090,11 @@ static void test_d3d11_surface_buffer(void)
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
     ok(obj == (IUnknown *)device, "Unexpected pointer.\n");
     IUnknown_Release(obj);
+
+    obj = NULL;
+    hr = IMFDXGIBuffer_GetUnknown(dxgi_buffer, &IID_IMFDXGIBuffer, &IID_IMFMediaBuffer, (void **)&obj);
+    ok(hr == E_NOINTERFACE, "Unexpected hr %#lx.\n", hr);
+    ok(!obj, "Unexpected object pointer.\n");
 
     hr = IMFDXGIBuffer_SetUnknown(dxgi_buffer, &IID_IMFDXGIBuffer, NULL);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
