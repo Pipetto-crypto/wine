@@ -9812,6 +9812,51 @@ static void test_ripevent(DWORD numexc)
     pRtlRemoveVectoredExceptionHandler(vectored_handler);
 }
 
+static void test_second_chance_exception(void)
+{
+    static const DWORD flags[] = {0, EXCEPTION_NONCONTINUABLE, EXCEPTION_STACK_INVALID};
+    char cmdline[2 * MAX_PATH];
+    PROCESS_INFORMATION pi;
+    STARTUPINFOA si = {0};
+    DWORD wait, exit_code;
+    unsigned int i;
+    BOOL ret;
+
+    if (!pNtRaiseException || !pRtlCaptureContext)
+    {
+        win_skip("NtRaiseException or RtlCaptureContext is not available.\n");
+        return;
+    }
+
+    si.cb = sizeof(si);
+    for (i = 0; i < ARRAY_SIZE(flags); ++i)
+    {
+        winetest_push_context("flags %#lx", flags[i]);
+        snprintf(cmdline, sizeof(cmdline), "\"%s\" %s second_chance %lu", my_argv[0], my_argv[1], flags[i]);
+        ret = CreateProcessA(NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+        ok(ret, "Failed to create child process, error %lu.\n", GetLastError());
+        if (ret)
+        {
+            wait = WaitForSingleObject(pi.hProcess, 15000);
+            ok(wait == WAIT_OBJECT_0, "Child process wait returned %#lx.\n", wait);
+            if (wait != WAIT_OBJECT_0)
+            {
+                TerminateProcess(pi.hProcess, 1);
+                WaitForSingleObject(pi.hProcess, 15000);
+            }
+            else
+            {
+                ret = GetExitCodeProcess(pi.hProcess, &exit_code);
+                ok(ret, "GetExitCodeProcess failed, error %lu.\n", GetLastError());
+                if (ret) ok(exit_code == 0xe000dead, "Unexpected exit code %#lx.\n", exit_code);
+            }
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+        winetest_pop_context();
+    }
+}
+
 static void subtest_fastfail(unsigned int code)
 {
     char cmdline[MAX_PATH];
@@ -12849,6 +12894,22 @@ START_TEST(exception)
             return;
         }
 
+        if (!strcmp(my_argv[2], "second_chance"))
+        {
+            static volatile LONG resumed;
+            EXCEPTION_RECORD record = {0};
+            CONTEXT context;
+
+            SetErrorMode(SEM_NOGPFAULTERRORBOX);
+            record.ExceptionCode = 0xe000dead;
+            record.ExceptionFlags = strtoul(my_argv[3], NULL, 0);
+            pRtlCaptureContext(&context);
+            if (resumed) ExitProcess(0xdead0001);
+            resumed = 1;
+            pNtRaiseException(&record, &context, FALSE);
+            ExitProcess(0xdead0002);
+        }
+
         sscanf( my_argv[3], "%p", &addr );
 
         if (addr != &test_stage)
@@ -13020,6 +13081,7 @@ START_TEST(exception)
         skip("Unsupported new unicode debug string model\n");
 
     test_ripevent(1);
+    test_second_chance_exception();
     test_fastfail();
     test_breakpoint(1);
     test_closehandle(0, (HANDLE)0xdeadbeef);
