@@ -1473,9 +1473,9 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
     GLXContext ctx = NtCurrentTeb()->glReserved2;
     struct gl_drawable *gl = impl_from_opengl_drawable( base );
     struct wgl_context *wgl_ctx = NtCurrentTeb()->glContext;
-    INT64 ust, msc, sbc, target_sbc = 0;
+    INT64 ust, msc, sbc, target_sbc;
     float viewport_old[4], viewport[4];
-    BOOL offscreen;
+    BOOL offscreen, waited = FALSE;
 
     TRACE( "drawable %s\n", debugstr_opengl_drawable( base ) );
 
@@ -1487,7 +1487,9 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
     {
         funcs->p_glFlush();
         target_sbc = pglXSwapBuffersMscOML( gdi_display, gl->drawable, 0, 0, 0 );
-        if (pglXWaitForSbcOML) pglXWaitForSbcOML( gdi_display, gl->drawable, target_sbc, &ust, &msc, &sbc );
+        /* A failed or no-op swap does not supply a swap count to wait for. */
+        if (target_sbc > 0 && pglXWaitForSbcOML)
+            waited = pglXWaitForSbcOML( gdi_display, gl->drawable, target_sbc, &ust, &msc, &sbc );
     }
 
     if (wgl_ctx && wgl_ctx->has_GL_ARB_viewport_array)
@@ -1497,7 +1499,7 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
         if (memcmp( viewport, viewport_old, sizeof(viewport) )) funcs->p_glViewportIndexedfv( 0, viewport_old );
     }
 
-    if (offscreen && !pglXWaitForSbcOML) XFlush( gdi_display );
+    if (offscreen && !waited) XFlush( gdi_display );
 
     client_surface_present( base->client );
     return TRUE;
