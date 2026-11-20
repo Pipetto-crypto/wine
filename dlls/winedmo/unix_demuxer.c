@@ -213,6 +213,7 @@ NTSTATUS demuxer_create( void *arg )
     const char *ext = params->url ? strrchr( params->url, '.' ) : NULL;
     const AVInputFormat *format;
     struct demuxer *demuxer;
+    BOOL needs_find_stream_info = FALSE;
     int i, ret;
 
     TRACE( "context %p, url %s, mime %s\n", params->context, debugstr_a(params->url), debugstr_a(params->mime_type) );
@@ -231,14 +232,27 @@ NTSTATUS demuxer_create( void *arg )
 
     if ((params->duration = get_context_duration( demuxer->ctx )) == AV_NOPTS_VALUE ||
         strstr( format->name, "mp3" ))
+        needs_find_stream_info = TRUE;
+
+    for (i = 0; i < demuxer->ctx->nb_streams && !needs_find_stream_info; ++i)
     {
-        if ((ret = avformat_find_stream_info( demuxer->ctx, NULL )) < 0)
-        {
-            ERR( "Failed to find stream info, error %s.\n", debugstr_averr(ret) );
-            goto failed;
-        }
-        params->duration = get_context_duration( demuxer->ctx );
+        AVStream *stream = demuxer->ctx->streams[i];
+        AVCodecParameters *par = stream->codecpar;
+
+        if (par->codec_id != AV_CODEC_ID_H264) continue;
+        if ((stream->sample_aspect_ratio.den && stream->sample_aspect_ratio.num) ||
+            (par->sample_aspect_ratio.den && par->sample_aspect_ratio.num)) continue;
+
+        needs_find_stream_info = TRUE;
     }
+
+    if (needs_find_stream_info && (ret = avformat_find_stream_info( demuxer->ctx, NULL )) < 0)
+    {
+        ERR( "Failed to find stream info, error %s.\n", debugstr_averr(ret) );
+        goto failed;
+    }
+
+    if (params->duration == AV_NOPTS_VALUE) params->duration = get_context_duration( demuxer->ctx );
     if (!(demuxer->streams = calloc( demuxer->ctx->nb_streams, sizeof(*demuxer->streams) ))) goto failed;
     if (demuxer_create_streams( demuxer )) goto failed;
 
@@ -448,11 +462,12 @@ NTSTATUS demuxer_stream_type( void *arg )
     struct demuxer *demuxer = get_demuxer( params->demuxer );
     AVStream *stream = demuxer->ctx->streams[params->stream];
     AVCodecParameters *par = demuxer->streams[params->stream].filter->par_out;
+    AVRational sar = stream->sample_aspect_ratio;
 
     TRACE( "demuxer %p, stream %u, stream %p, index %u\n", demuxer, params->stream, stream, stream->index );
 
-    return media_type_from_codec_params( par, &stream->sample_aspect_ratio,
-                                         &stream->avg_frame_rate, 0, &params->media_type );
+    if (!sar.den || !sar.num) sar = stream->codecpar->sample_aspect_ratio;
+    return media_type_from_codec_params( par, &sar, &stream->avg_frame_rate, 0, &params->media_type );
 }
 
 #endif /* HAVE_FFMPEG */
