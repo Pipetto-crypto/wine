@@ -4449,6 +4449,10 @@ static void test_MFCreateCollection(void)
     hr = IMFCollection_InsertElementAt(collection, 10, (IUnknown *)collection);
     ok(hr == S_OK, "Failed to insert element, hr %#lx.\n", hr);
 
+    /* UINT_MAX must not wrap idx + 1 and corrupt the collection. */
+    hr = IMFCollection_InsertElementAt(collection, ~(DWORD)0, NULL);
+    ok(hr == E_INVALIDARG, "Unexpected hr %#lx.\n", hr);
+
     count = 0;
     hr = IMFCollection_GetElementCount(collection, &count);
     ok(hr == S_OK, "Failed to get element count, hr %#lx.\n", hr);

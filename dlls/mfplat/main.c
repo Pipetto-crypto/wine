@@ -7842,6 +7842,10 @@ static HRESULT WINAPI collection_InsertElementAt(IMFCollection *iface, DWORD idx
 
     TRACE("%p, %lu, %p.\n", iface, idx, element);
 
+    /* Avoid wrapping idx + 1 and indexing past the DWORD-sized collection. */
+    if (idx == ~(DWORD)0)
+        return E_INVALIDARG;
+
     count = max(idx + 1, collection->count + 1);
     if (!mf_array_reserve((void **)&collection->elements, &collection->capacity, count, sizeof(*collection->elements)))
         return E_OUTOFMEMORY;
