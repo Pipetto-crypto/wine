@@ -158,6 +158,15 @@ shared memory is unavailable, fsync can use the Termux temporary directory
 separate directory for fsync, set `WINE_FSYNC_SHM_DIR` to an absolute,
 writable directory shared by wineserver and its clients.
 
+Prefix initialization and updates do not prompt to download Wine Mono or
+Wine Gecko. Locally available addon packages are still installed. To request
+an installation manually, run:
+
+```
+wine control appwiz.cpl install_mono
+wine control appwiz.cpl install_gecko
+```
+
 
 ## GETTING MORE INFORMATION
 

@@ -771,6 +771,7 @@ BOOL install_addon(addon_t addon_type)
     if (install_from_registered_dir() == INSTALL_NEXT
         && install_from_default_dir() == INSTALL_NEXT
         && install_from_cache() == INSTALL_NEXT
+        && !GetEnvironmentVariableW( L"WINE_NO_ADDON_DIALOG", NULL, 0 )
         && (url = get_url()))
         DialogBoxW(hInst, addon->dialog_template, 0, installer_proc);
 

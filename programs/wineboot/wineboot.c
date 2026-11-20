@@ -1525,10 +1525,13 @@ static void start_samss_service(void)
 
 static HANDLE start_rundll32( const WCHAR *inf_path, const WCHAR *install, WORD machine )
 {
+    UNICODE_STRING no_addon_dialog = RTL_CONSTANT_STRING( L"WINE_NO_ADDON_DIALOG" );
+    UNICODE_STRING enabled = RTL_CONSTANT_STRING( L"1" );
     WCHAR app[MAX_PATH + ARRAY_SIZE(L"\\rundll32.exe" )];
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    WCHAR *buffer;
+    WCHAR *buffer, *env;
+    NTSTATUS status;
     DWORD len;
 
     memset( &si, 0, sizeof(si) );
@@ -1543,11 +1546,24 @@ static HANDLE start_rundll32( const WCHAR *inf_path, const WCHAR *install, WORD 
     if (!(buffer = malloc( len * sizeof(WCHAR) ))) return 0;
     swprintf( buffer, len, L"%s setupapi,InstallHinfSection %s 128 %s", app, install, inf_path );
 
-    if (CreateProcessW( app, buffer, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi ))
+    /* Only prefix setup and its children should suppress addon download dialogs. */
+    if ((status = RtlCreateEnvironment( TRUE, &env )))
+    {
+        WINE_ERR( "Failed to copy setup environment, status %#lx\n", status );
+        free( buffer );
+        return 0;
+    }
+    if ((status = RtlSetEnvironmentVariable( &env, &no_addon_dialog, &enabled )))
+    {
+        WINE_ERR( "Failed to disable addon download dialogs, status %#lx\n", status );
+        pi.hProcess = 0;
+    }
+    else if (CreateProcessW( app, buffer, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT, env, NULL, &si, &pi ))
         CloseHandle( pi.hThread );
     else
         pi.hProcess = 0;
 
+    RtlDestroyEnvironment( env );
     free( buffer );
     return pi.hProcess;
 }
