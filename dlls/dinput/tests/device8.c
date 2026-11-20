@@ -1684,7 +1684,6 @@ static void test_sys_mouse( DWORD version )
 
         mouse_event( MOUSEEVENTF_WHEEL, 0, 0, delta, 0 );
         res = WaitForSingleObject( event, 100 );
-        todo_wine_if( version < 0x800 && res)
         ok( !res, "WaitForSingleObject returned %#lx\n", res );
 
         for (j = 0; j < 100; j++)
@@ -1743,7 +1742,6 @@ static void test_sys_mouse( DWORD version )
 
         mouse_event( MOUSEEVENTF_WHEEL, 0, 0, delta, 0 );
         res = WaitForSingleObject( event, 100 );
-        todo_wine_if( version < 0x800 && res)
         ok( !res, "WaitForSingleObject returned %#lx\n", res );
 
         for (j = 0; j < 100; j++)

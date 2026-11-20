@@ -250,6 +250,7 @@ int dinput_mouse_hook( IDirectInputDevice8W *iface, WPARAM wparam, LPARAM lparam
                 queue_event( iface, 2, state->lZ, GetCurrentTime(), seq );
             else
                 queue_event( iface, 2, (short)HIWORD( hook->mouseData ), GetCurrentTime(), seq );
+            notify = TRUE;
             /* FarCry crashes if it gets a mouse wheel message */
             /* FIXME: should probably filter out other messages too */
             ret = impl->clipped;
