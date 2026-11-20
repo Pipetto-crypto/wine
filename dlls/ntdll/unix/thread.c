@@ -1336,6 +1336,33 @@ NTSTATUS WINAPI NtCreateThread( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRI
     return STATUS_NOT_IMPLEMENTED;
 }
 
+static NTSTATUS create_pthread( TEB *teb, void *(*start)(void *) )
+{
+    struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+    pthread_attr_t attr;
+    pthread_t id;
+    int ret;
+
+    if ((ret = pthread_attr_init( &attr )))
+    {
+        WARN( "pthread_attr_init failed: %d\n", ret );
+        return STATUS_NO_MEMORY;
+    }
+
+    /* A default pthread stack cannot substitute for the Wine kernel stack. */
+    if ((ret = pthread_attr_setstack( &attr, thread_data->kernel_stack, kernel_stack_size )) ||
+        (ret = pthread_attr_setguardsize( &attr, 0 )))
+        WARN( "Failed to configure the pthread stack: %d\n", ret );
+    else
+    {
+        pthread_attr_setscope( &attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread, if supported */
+        InterlockedIncrement( &nb_threads );
+        if ((ret = pthread_create( &id, &attr, start, teb ))) InterlockedDecrement( &nb_threads );
+    }
+    pthread_attr_destroy( &attr );
+    return ret ? STATUS_NO_MEMORY : STATUS_SUCCESS;
+}
+
 /***********************************************************************
  *              NtCreateThreadEx   (NTDLL.@)
  */
@@ -1348,8 +1375,6 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
                                          THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER | THREAD_CREATE_FLAGS_SKIP_LOADER_INIT |
                                          THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE;
     sigset_t sigset;
-    pthread_t pthread_id;
-    pthread_attr_t pthread_attr;
     data_size_t len;
     struct object_attributes *objattr;
     struct ntdll_thread_data *thread_data;
@@ -1456,18 +1481,7 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
     thread_data->start = start;
     thread_data->param = param;
 
-    pthread_attr_init( &pthread_attr );
-    pthread_attr_setstack( &pthread_attr, thread_data->kernel_stack, kernel_stack_size );
-    pthread_attr_setguardsize( &pthread_attr, 0 );
-    pthread_attr_setscope( &pthread_attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread */
-    InterlockedIncrement( &nb_threads );
-    if (pthread_create( &pthread_id, &pthread_attr, (void * (*)(void *))start_thread, teb ))
-    {
-        InterlockedDecrement( &nb_threads );
-        virtual_free_teb( teb );
-        status = STATUS_NO_MEMORY;
-    }
-    pthread_attr_destroy( &pthread_attr );
+    if ((status = create_pthread( teb, (void * (*)(void *))start_thread ))) virtual_free_teb( teb );
 
 done:
     pthread_sigmask( SIG_SETMASK, &sigset, NULL );
@@ -1511,8 +1525,6 @@ NTSTATUS WINAPI PsCreateSystemThread( HANDLE *handle, ACCESS_MASK access, OBJECT
                                       HANDLE process, CLIENT_ID *id, PRTL_THREAD_START_ROUTINE start, void *param )
 {
     sigset_t sigset;
-    pthread_t pthread_id;
-    pthread_attr_t pthread_attr;
     data_size_t len;
     struct object_attributes *objattr;
     struct ntdll_thread_data *thread_data;
@@ -1576,18 +1588,7 @@ NTSTATUS WINAPI PsCreateSystemThread( HANDLE *handle, ACCESS_MASK access, OBJECT
     thread_data->start = start;
     thread_data->param = param;
 
-    pthread_attr_init( &pthread_attr );
-    pthread_attr_setstack( &pthread_attr, thread_data->kernel_stack, kernel_stack_size );
-    pthread_attr_setguardsize( &pthread_attr, 0 );
-    pthread_attr_setscope( &pthread_attr, PTHREAD_SCOPE_SYSTEM ); /* force creating a kernel thread */
-    InterlockedIncrement( &nb_threads );
-    if (pthread_create( &pthread_id, &pthread_attr, (void * (*)(void *))start_system_thread, teb ))
-    {
-        InterlockedDecrement( &nb_threads );
-        virtual_free_teb( teb );
-        status = STATUS_NO_MEMORY;
-    }
-    pthread_attr_destroy( &pthread_attr );
+    if ((status = create_pthread( teb, (void * (*)(void *))start_system_thread ))) virtual_free_teb( teb );
 
 done:
     pthread_sigmask( SIG_SETMASK, &sigset, NULL );
