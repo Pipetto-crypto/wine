@@ -491,6 +491,7 @@ static ULONG WINAPI analysissource_Release(IDWriteTextAnalysisSource *iface)
 }
 
 static const WCHAR *g_source;
+static const WCHAR *g_locale_name;
 
 static HRESULT WINAPI analysissource_GetTextAtPosition(IDWriteTextAnalysisSource *iface,
     UINT32 position, WCHAR const** text, UINT32* text_len)
@@ -526,8 +527,8 @@ static DWRITE_READING_DIRECTION WINAPI analysissource_GetParagraphReadingDirecti
 static HRESULT WINAPI analysissource_GetLocaleName(IDWriteTextAnalysisSource *iface,
     UINT32 position, UINT32* text_len, WCHAR const** locale)
 {
-    *locale = NULL;
-    *text_len = 0;
+    *locale = g_locale_name;
+    *text_len = g_locale_name ? lstrlenW(g_locale_name) : 0;
     return S_OK;
 }
 
@@ -5540,6 +5541,30 @@ static void test_FontFallbackBuilder(void)
     ok(font != NULL, "Expected font instance %p.\n", font);
     if (font)
         IDWriteFont_Release(font);
+
+    /* A zh-CN source should use a zh-Hans mapping. */
+    range.first = range.last = 'A';
+    hr = IDWriteFontFallbackBuilder_AddMapping(builder, &range, 1, &familyW, 1, &fallbackcollection,
+            L"zh-Hans", NULL, 7.0f);
+    ok(hr == S_OK, "Failed to add mapping, hr %#lx.\n", hr);
+
+    hr = IDWriteFontFallbackBuilder_CreateFontFallback(builder, &fallback);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    g_source = L"A";
+    g_locale_name = L"zh-CN";
+    mappedlength = 0;
+    scale = 0.0f;
+    font = NULL;
+    hr = IDWriteFontFallback_MapCharacters(fallback, &analysissource, 0, 1, NULL, NULL, DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, &mappedlength, &font, &scale);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(mappedlength == 1, "Unexpected length %u.\n", mappedlength);
+    ok(scale == 7.0f, "Expected zh-Hans mapping scale, got %f.\n", scale);
+    ok(font != NULL, "Expected fallback font instance.\n");
+    if (font)
+        IDWriteFont_Release(font);
+    g_locale_name = NULL;
 
     if (SUCCEEDED(IDWriteFontFallback_QueryInterface(fallback, &IID_IDWriteFontFallback1, (void **)&fallback1)))
     {

@@ -319,7 +319,7 @@ system_fallback_config[] =
 
     /* CJK Radicals Supplement - 2E80-2EFF */
 
-    { "2E80-2EFF",              L"Microsoft YaHei", L"zh-Hans" },
+    { "2E80-2EFF",              L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "2E80-2EFF",              L"Noto Sans CJK TC", L"zh-Hant" },
     { "2E80-2EFF",              L"Malgun Gothic", L"ko" },
 
@@ -328,7 +328,7 @@ system_fallback_config[] =
        Katakana                    - 30A0-30FF
        Katakana Phonetic Ext.      - 31F0-31FF */
 
-    { "3000-30FF, 31F0-31FF",   L"Microsoft YaHei", L"zh-Hans" },
+    { "3000-30FF, 31F0-31FF",   L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "3000-30FF, 31F0-31FF",   L"Noto Sans CJK TC", L"zh-Hant" },
     { "3000-30FF, 31F0-31FF",   L"Malgun Gothic", L"ko" },
     { "3000-30FF, 31F0-31FF",   L"MS Gothic" },
@@ -336,7 +336,7 @@ system_fallback_config[] =
     /* CJK Unified Ext A - 3400-4DBF
        CJK Unified       - 4E00-9FFF */
 
-    { "3400-4DBF, 4E00-9FFF",   L"Microsoft YaHei", L"zh-Hans" },
+    { "3400-4DBF, 4E00-9FFF",   L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "3400-4DBF, 4E00-9FFF",   L"Noto Sans CJK TC", L"zh-Hant" },
     { "3400-4DBF, 4E00-9FFF",   L"Malgun Gothic", L"ko" },
     { "3400-4DBF, 4E00-9FFF",   L"MS Gothic" },
@@ -355,27 +355,27 @@ system_fallback_config[] =
 
     /* CJK Compatibility Ideographs - F900-FAFF */
 
-    { "F900-FAFF",              L"Microsoft YaHei", L"zh-Hans" },
+    { "F900-FAFF",              L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "F900-FAFF",              L"Noto Sans CJK TC", L"zh-Hant" },
     { "F900-FAFF",              L"Malgun Gothic", L"ko" },
     { "F900-FAFF",              L"MS Gothic" },
 
     /* Vertical Forms - FE10-FE1F */
 
-    { "FE10-FE1F",              L"Microsoft YaHei", L"zh-Hans" },
+    { "FE10-FE1F",              L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "FE10-FE1F",              L"Malgun Gothic", L"ko" },
     { "FE10-FE1F",              L"Noto Sans CJK TC" },
 
     /* CJK Compatibility Forms - FE30-FE4F
        Small Form Variants     - FE50-FE6F */
 
-    { "FE30-FE6F",              L"Microsoft YaHei", L"zh-Hans" },
+    { "FE30-FE6F",              L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "FE30-FE6F",              L"Malgun Gothic", L"ko" },
     { "FE30-FE6F",              L"MS Gothic", L"ja" },
     { "FE30-FE6F",              L"Noto Sans CJK TC" },
 
     /* Halfwidth and Fullwidth Forms */
-    { "FF00-FFEF",              L"Microsoft YaHei", L"zh-Hans" },
+    { "FF00-FFEF",              L"Microsoft YaHei, Noto Sans CJK SC", L"zh-Hans" },
     { "FF00-FFEF",              L"Noto Sans CJK TC", L"zh-Hant" },
     { "FF00-FFEF",              L"Malgun Gothic", L"ko" },
     { "FF00-FFEF",              L"MS Gothic" },
@@ -534,7 +534,7 @@ static HRESULT fallback_locale_add_mapping(struct fallback_locale *locale, size_
     return S_OK;
 }
 
-/* TODO: potentially needs improvement to consider partially matching locale names. */
+/* TODO: extend locale-tag matching beyond the Chinese script and region aliases below. */
 static struct fallback_locale * font_fallback_get_locale(const struct list *locales,
         const WCHAR *locale_name, bool use_neutral)
 {
@@ -547,6 +547,35 @@ static struct fallback_locale * font_fallback_get_locale(const struct list *loca
     }
 
     return neutral;
+}
+
+static struct fallback_locale * font_fallback_get_locale_for_text(const struct list *locales,
+        const WCHAR *locale_name)
+{
+    const WCHAR *subtag, *script = NULL;
+    struct fallback_locale *locale;
+
+    if ((locale = font_fallback_get_locale(locales, locale_name, false))) return locale;
+
+    /* System mappings use script subtags for Chinese, while text sources often use region tags. */
+    if (!wcsnicmp(locale_name, L"zh-", 3))
+    {
+        subtag = locale_name + 3;
+        if ((!wcsnicmp(subtag, L"Hans", 4) && (!subtag[4] || subtag[4] == '-')) ||
+            (!wcsnicmp(subtag, L"CN", 2) && (!subtag[2] || subtag[2] == '-')) ||
+            (!wcsnicmp(subtag, L"SG", 2) && (!subtag[2] || subtag[2] == '-')) ||
+            (!wcsnicmp(subtag, L"CHS", 3) && (!subtag[3] || subtag[3] == '-')))
+            script = L"zh-Hans";
+        else if ((!wcsnicmp(subtag, L"Hant", 4) && (!subtag[4] || subtag[4] == '-')) ||
+                 (!wcsnicmp(subtag, L"TW", 2) && (!subtag[2] || subtag[2] == '-')) ||
+                 (!wcsnicmp(subtag, L"HK", 2) && (!subtag[2] || subtag[2] == '-')) ||
+                 (!wcsnicmp(subtag, L"MO", 2) && (!subtag[2] || subtag[2] == '-')) ||
+                 (!wcsnicmp(subtag, L"CHT", 3) && (!subtag[3] || subtag[3] == '-')))
+            script = L"zh-Hant";
+    }
+
+    if (script && (locale = font_fallback_get_locale(locales, script, false))) return locale;
+    return font_fallback_get_locale(locales, L"", true);
 }
 
 struct fallback_data
@@ -2528,7 +2557,7 @@ static HRESULT fallback_map_characters(const struct dwrite_fontfallback *fallbac
     if (!locale_name) locale_name = L"";
 
     /* Lookup locale entry once, if specific locale is missing neutral one will be returned. */
-    locale = font_fallback_get_locale(&data->locales, locale_name, true);
+    locale = font_fallback_get_locale_for_text(&data->locales, locale_name);
 
     if (FAILED(hr = text_source_context_init(&context, source, position, length))) return hr;
 
