@@ -193,7 +193,8 @@ struct glx_pixel_format
 {
     GLXFBConfig fbconfig;
     XVisualInfo *visual;
-    int         fmt_id;
+    int         drawable_type;
+    int         render_type_mask;
     int         render_type;
     DWORD       dwFlags; /* We store some PFD_* flags in here for emulated bitmap formats */
 };
@@ -763,11 +764,11 @@ failed:
     return STATUS_NOT_SUPPORTED;
 }
 
-static int get_render_type_from_fbconfig(Display *display, GLXFBConfig fbconfig)
+static int get_context_render_type( int render_type_mask )
 {
-    int render_type, render_type_bit;
-    pglXGetFBConfigAttrib(display, fbconfig, GLX_RENDER_TYPE, &render_type_bit);
-    switch(render_type_bit)
+    int render_type;
+
+    switch (render_type_mask)
     {
         case GLX_RGBA_BIT:
             render_type = GLX_RGBA_TYPE;
@@ -782,27 +783,25 @@ static int get_render_type_from_fbconfig(Display *display, GLXFBConfig fbconfig)
             render_type = GLX_RGBA_UNSIGNED_FLOAT_TYPE_EXT;
             break;
         default:
-            ERR("Unknown render_type: %x\n", render_type_bit);
+            ERR( "Unknown render_type: %x\n", render_type_mask );
             render_type = 0;
     }
     return render_type;
 }
 
 /* Check whether a fbconfig is suitable for Windows-style bitmap rendering */
-static BOOL check_fbconfig_bitmap_capability( GLXFBConfig fbconfig, const XVisualInfo *vis )
+static BOOL check_fbconfig_bitmap_capability( const struct glx_pixel_format *format )
 {
     int dbuf, value;
-
-    pglXGetFBConfigAttrib( gdi_display, fbconfig, GLX_BUFFER_SIZE, &value );
-    if (vis && value != vis->depth) return FALSE;
-
-    pglXGetFBConfigAttrib( gdi_display, fbconfig, GLX_DOUBLEBUFFER, &dbuf );
-    pglXGetFBConfigAttrib(gdi_display, fbconfig, GLX_DRAWABLE_TYPE, &value);
 
     /* Windows only supports bitmap rendering on single buffered formats. The fbconfig also needs to
      * have the GLX_PBUFFER_BIT set, because Wine's implementation of bitmap rendering uses
      * pbuffers. */
-    return !dbuf && (value & GLX_PBUFFER_BIT);
+    if (!(format->drawable_type & GLX_PBUFFER_BIT)) return FALSE;
+    if (pglXGetFBConfigAttrib( gdi_display, format->fbconfig, GLX_DOUBLEBUFFER, &dbuf ) || dbuf) return FALSE;
+    if (format->visual && (pglXGetFBConfigAttrib( gdi_display, format->fbconfig, GLX_BUFFER_SIZE, &value ) ||
+                           value != format->visual->depth)) return FALSE;
+    return TRUE;
 }
 
 static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
@@ -811,7 +810,6 @@ static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
     int size = 0, onscreen_size = 0;
     int fmt_id, nCfgs, i, run;
     GLXFBConfig* cfgs;
-    XVisualInfo *visinfo;
 
     *onscreen_count = 0;
     cfgs = pglXGetFBConfigs( gdi_display, DefaultScreen( gdi_display ), &nCfgs );
@@ -840,8 +838,17 @@ static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
     for(run=0; run < 2; run++)
     {
         for(i=0; i<nCfgs; i++) {
-            pglXGetFBConfigAttrib(gdi_display, cfgs[i], GLX_FBCONFIG_ID, &fmt_id);
-            visinfo = pglXGetVisualFromFBConfig(gdi_display, cfgs[i]);
+            struct glx_pixel_format format = {.fbconfig = cfgs[i]};
+            XVisualInfo *visinfo;
+
+            if (pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_FBCONFIG_ID, &fmt_id ) ||
+                pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_DRAWABLE_TYPE, &format.drawable_type ) ||
+                pglXGetFBConfigAttrib( gdi_display, format.fbconfig, GLX_RENDER_TYPE, &format.render_type_mask ))
+            {
+                WARN( "Failed to query GLX FBConfig at index %d\n", i );
+                continue;
+            }
+            format.visual = visinfo = pglXGetVisualFromFBConfig( gdi_display, format.fbconfig );
 
             /* The first run we only add onscreen formats (ones which have an associated X Visual).
              * The second run we only set offscreen formats. */
@@ -861,29 +868,19 @@ static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
                 }
 
                 TRACE("Found onscreen format FBCONFIG_ID 0x%x corresponding to iPixelFormat %d at GLX index %d\n", fmt_id, size+1, i);
-                list[size].fbconfig = cfgs[i];
-                list[size].visual = visinfo;
-                list[size].fmt_id = fmt_id;
-                list[size].render_type = get_render_type_from_fbconfig(gdi_display, cfgs[i]);
-                list[size].dwFlags = 0;
-                size++;
+                format.render_type = get_context_render_type( format.render_type_mask );
+                list[size++] = format;
                 onscreen_size++;
 
                 /* Clone a format if it is bitmap capable for indirect rendering to bitmaps */
-                if (check_fbconfig_bitmap_capability( cfgs[i], visinfo ))
+                if (check_fbconfig_bitmap_capability( &format ))
                 {
                     TRACE("Found bitmap capable format FBCONFIG_ID 0x%x corresponding to iPixelFormat %d at GLX index %d\n", fmt_id, size+1, i);
-                    list[size].fbconfig = cfgs[i];
-                    list[size].visual = visinfo;
-                    list[size].fmt_id = fmt_id;
-                    list[size].render_type = get_render_type_from_fbconfig(gdi_display, cfgs[i]);
-                    list[size].dwFlags = PFD_DRAW_TO_BITMAP | PFD_SUPPORT_GDI | PFD_GENERIC_FORMAT;
-                    size++;
+                    format.dwFlags = PFD_DRAW_TO_BITMAP | PFD_SUPPORT_GDI | PFD_GENERIC_FORMAT;
+                    list[size++] = format;
                     onscreen_size++;
                 }
             } else if(run && !visinfo) {
-                int window_drawable=0;
-                pglXGetFBConfigAttrib(gdi_display, cfgs[i], GLX_DRAWABLE_TYPE, &window_drawable);
 
                 /* Recent Nvidia drivers and DRI drivers offer window drawable formats without a visual.
                  * This are formats like 16-bit rgb on a 24-bit desktop. In order to support these formats
@@ -891,19 +888,17 @@ static UINT x11drv_init_pixel_formats( UINT *onscreen_count )
                  * likely make our child window opengl rendering more complicated since likely you can't use
                  * XCopyArea on a GLX Window.
                  * For now ignore fbconfigs which are window drawable but lack a visual. */
-                if(window_drawable & GLX_WINDOW_BIT)
+                if (format.drawable_type & GLX_WINDOW_BIT)
                 {
                     TRACE("Skipping FBCONFIG_ID 0x%x as an offscreen format because it is window_drawable\n", fmt_id);
                     continue;
                 }
 
                 TRACE("Found offscreen format FBCONFIG_ID 0x%x corresponding to iPixelFormat %d at GLX index %d\n", fmt_id, size+1, i);
-                list[size].fbconfig = cfgs[i];
-                list[size].fmt_id = fmt_id;
-                list[size].render_type = get_render_type_from_fbconfig(gdi_display, cfgs[i]);
-                if (!check_fbconfig_bitmap_capability( cfgs[i], NULL )) list[size].dwFlags = 0;
-                else list[size].dwFlags = PFD_DRAW_TO_BITMAP | PFD_SUPPORT_GDI | PFD_GENERIC_FORMAT;
-                size++;
+                format.render_type = get_context_render_type( format.render_type_mask );
+                if (check_fbconfig_bitmap_capability( &format ))
+                    format.dwFlags = PFD_DRAW_TO_BITMAP | PFD_SUPPORT_GDI | PFD_GENERIC_FORMAT;
+                list[size++] = format;
             }
             else if (visinfo) XFree(visinfo);
         }
@@ -1011,13 +1006,9 @@ static BOOL x11drv_surface_create( HWND hwnd, BOOL raw, int format, struct openg
 
 static BOOL x11drv_describe_pixel_format( int format, struct wgl_pixel_format *pf )
 {
-    int value, drawable_type = 0, render_type = 0;
-    struct glx_pixel_format *fmt = glx_pixel_format_from_format( format );
-    int rb, gb, bb, ab;
-
-    /* If we can't get basic information, there is no point continuing */
-    if (pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_DRAWABLE_TYPE, &drawable_type )) return 0;
-    if (pglXGetFBConfigAttrib( gdi_display, fmt->fbconfig, GLX_RENDER_TYPE, &render_type )) return 0;
+    const struct glx_pixel_format *fmt = glx_pixel_format_from_format( format );
+    int drawable_type = fmt->drawable_type, render_type = fmt->render_type_mask;
+    int value, rb, gb, bb, ab;
 
     memset( pf, 0, sizeof(*pf) );
     pf->pfd.nSize = sizeof(PIXELFORMATDESCRIPTOR);
