@@ -514,6 +514,10 @@ static NTSTATUS loader_exec( char **argv, WORD machine )
 
     argv[1] = strdup( wineloader );
     preloader_exec( argv );
+    {
+        int err = errno;
+        ERR( "failed to execute loader %s: %s\n", debugstr_a(argv[1]), strerror(err) );
+    }
     return STATUS_INVALID_IMAGE_FORMAT;
 }
 

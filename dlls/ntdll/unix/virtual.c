@@ -834,9 +834,9 @@ static void reserve_area( void *addr, void *end )
 /***********************************************************************
  *           wine_emulator_addr_space_limit
  *
- * Upper bound of the address space to use under an emulator. Defaults to the
- * same 39-bit safe window used by the 39-bit layout patches (512GB - 64KB),
- * overridable with WINE_EMULATOR_LIMIT=<hex|dec>.
+ * Initial address space cap to use under an emulator. Defaults to the
+ * Windows address space limit (a 39-bit safe window on 64-bit builds).
+ * WINE_EMULATOR_LIMIT=<hex|dec> can further restrict the initial limits.
  */
 static void *wine_emulator_addr_space_limit(void)
 {
@@ -854,7 +854,7 @@ static void *wine_emulator_addr_space_limit(void)
             return (void *)(ULONG_PTR)value;
         WARN( "Invalid WINE_EMULATOR_LIMIT %s, using the default.\n", debugstr_a( env ) );
     }
-    return (void *)0x7fffff0000;
+    return address_space_limit;
 }
 
 static void mmap_init( const struct preload_info *preload_info )
@@ -3940,11 +3940,13 @@ void virtual_init(void)
     {
         void *limit = wine_emulator_addr_space_limit();
 
-        address_space_limit = limit;
-        user_space_limit    = limit;
-        working_set_limit   = limit;
-        host_addr_space_limit = limit;
-        WARN( "box64/emu compat: address space limited to %p\n", limit );
+        /* An emulator cap must not expand the Windows or detected host limits. */
+        host_addr_space_limit = min( host_addr_space_limit, limit );
+        address_space_limit = min( address_space_limit, host_addr_space_limit );
+        user_space_limit = min( user_space_limit, address_space_limit );
+        working_set_limit = min( working_set_limit, user_space_limit );
+        TRACE( "box64/emu compat: initial address space limit %p (host %p)\n",
+               address_space_limit, host_addr_space_limit );
     }
 
     kernel_writewatch_init();
