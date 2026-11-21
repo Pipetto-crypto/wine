@@ -237,7 +237,7 @@ static NTSTATUS get_object( HANDLE handle, struct esync **obj )
             if (!(ret = wine_server_call( req )))
             {
                 type = reply->type;
-                shm_idx = reply->sync_shm_idx;
+                shm_idx = reply->fsync_shm_idx;  /* shared field with the fsync backend */
                 fd = wine_server_receive_fd( &fd_handle );
                 assert( wine_server_ptr_handle(fd_handle) == handle );
             }
