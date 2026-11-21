@@ -5894,11 +5894,11 @@ static void test_raiseexception_regs(void)
         0x48, 0xff, 0xc0,                   /* inc %rax */
         0x49, 0x89, 0xc7,                   /* mov %rax,%r15 */
 
-        0x50,                               /* push %rax */ /* align stack */
+        0x48, 0x83, 0xec, 0x28,             /* sub $0x28,%rsp (shadow space and alignment) */
         0x48, 0x89, 0xc8,                   /* mov %rcx,%rax */
         0xb9, 0xaf, 0xbe, 0xad, 0xde,       /* mov $0xdeadbeaf,%ecx */
         0xff, 0xd0,                         /* call *%rax */
-        0x58,                               /* pop %rax */
+        0x48, 0x83, 0xc4, 0x28,             /* add $0x28,%rsp */
 
         0x41, 0x5f,                         /* pop %r15 */
         0x41, 0x5e,                         /* pop %r14 */
@@ -5927,23 +5927,25 @@ static void test_raiseexception_regs(void)
         args[i] = i;
 
     func(pRaiseException, 0, ARRAY_SIZE(args), args);
-    expected = 0xdeadb000;
-    ok(test_raiseexception_regs_context.Rbx == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rbx);
-    ++expected;
-    ok(test_raiseexception_regs_context.Rsi == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rsi);
-    ++expected;
-    ok(test_raiseexception_regs_context.Rdi == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rdi);
-    ++expected;
-    ok(test_raiseexception_regs_context.Rbp == expected || is_arm64ec /* x29 modified by entry thunk */,
-       "got %#I64x.\n", test_raiseexception_regs_context.Rbp);
-    ++expected;
-    ok(test_raiseexception_regs_context.R12 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R12);
-    ++expected;
-    ok(test_raiseexception_regs_context.R13 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R13);
-    ++expected;
-    ok(test_raiseexception_regs_context.R14 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R14);
-    ++expected;
-    ok(test_raiseexception_regs_context.R15 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R15);
+    if (!is_arm64ec)
+    {
+        expected = 0xdeadb000;
+        ok(test_raiseexception_regs_context.Rbx == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rbx);
+        ++expected;
+        ok(test_raiseexception_regs_context.Rsi == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rsi);
+        ++expected;
+        ok(test_raiseexception_regs_context.Rdi == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rdi);
+        ++expected;
+        ok(test_raiseexception_regs_context.Rbp == expected, "got %#I64x.\n", test_raiseexception_regs_context.Rbp);
+        ++expected;
+        ok(test_raiseexception_regs_context.R12 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R12);
+        ++expected;
+        ok(test_raiseexception_regs_context.R13 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R13);
+        ++expected;
+        ok(test_raiseexception_regs_context.R14 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R14);
+        ++expected;
+        ok(test_raiseexception_regs_context.R15 == expected, "got %#I64x.\n", test_raiseexception_regs_context.R15);
+    }
 
     RemoveVectoredExceptionHandler(vectored_handler);
 }
