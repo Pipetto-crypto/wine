@@ -14,6 +14,8 @@ import tempfile
 LAUNCHER = r'''#!/bin/sh
 appname=${0##*/}
 appname=${appname%.exe}.exe
+preferred_loader=@PREFERRED_LOADER@
+fallback_loader=@FALLBACK_LOADER@
 case "$0" in
     */*) appdir=${0%/*} ;;
     *) appdir=. ;;
@@ -21,10 +23,10 @@ esac
 if [ -n "$WINELOADER" ] && [ -x "$WINELOADER" ]; then
     exec "$WINELOADER" "$appname" "$@"
 fi
-for loader in "$appdir/wine" "$appdir/wine64"; do
+for loader in "$appdir/$preferred_loader" "$appdir/$fallback_loader"; do
     [ ! -x "$loader" ] || exec "$loader" "$appname" "$@"
 done
-for name in wine wine64; do
+for name in "$preferred_loader" "$fallback_loader"; do
     loader=$(command -v "$name") || continue
     [ ! -x "$loader" ] || exec "$loader" "$appname" "$@"
 done
@@ -41,13 +43,18 @@ def fix_launchers(prefix):
     for path in sorted(bindir.iterdir()):
         if path.name in ("wine", "wine64") or not path.is_symlink():
             continue
-        if os.readlink(path) not in ("wine", "wine64"):
+        preferred = os.readlink(path)
+        if preferred not in ("wine", "wine64"):
             continue
+        fallback = "wine64" if preferred == "wine" else "wine"
+        launcher = LAUNCHER.replace("@PREFERRED_LOADER@", preferred).replace(
+            "@FALLBACK_LOADER@", fallback
+        )
         # Replace the utility symlink itself, never its loader target. Create
         # the replacement beside it so replacement is atomic on this filesystem.
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=bindir,
                                          prefix=".wine-launcher-", delete=False) as out:
-            out.write(LAUNCHER)
+            out.write(launcher)
             temporary = Path(out.name)
         try:
             temporary.chmod(0o755)
