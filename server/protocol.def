@@ -4390,6 +4390,7 @@ enum inproc_sync_type
 
 /* fsync definitions */
 #define FSYNC_SHM_PAGE_SIZE 0x10000
+#define ESYNC_USED_BY_SERVER 0x7eadeeee
 #define FSYNC_USED_BY_SERVER 0x7eadfeef
 
 enum fsync_type
@@ -4401,6 +4402,18 @@ enum fsync_type
     FSYNC_AUTO_SERVER,
     FSYNC_MANUAL_SERVER,
     FSYNC_QUEUE,
+};
+
+/* esync definitions */
+enum esync_type
+{
+    ESYNC_SEMAPHORE = 1,
+    ESYNC_AUTO_EVENT,
+    ESYNC_MANUAL_EVENT,
+    ESYNC_MUTEX,
+    ESYNC_AUTO_SERVER,
+    ESYNC_MANUAL_SERVER,
+    ESYNC_QUEUE,
 };
 
 @REQ(fsync_free_shm_idx)

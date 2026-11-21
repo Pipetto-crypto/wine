@@ -6345,18 +6345,6 @@ enum fsync_type
     FSYNC_QUEUE,
 };
 
-/* object kinds tracked by the eventfd based esync backend */
-enum esync_type
-{
-    ESYNC_SEMAPHORE = 1,
-    ESYNC_AUTO_EVENT,
-    ESYNC_MANUAL_EVENT,
-    ESYNC_MUTEX,
-    ESYNC_AUTO_SERVER,
-    ESYNC_MANUAL_SERVER,
-    ESYNC_QUEUE,
-};
-
 struct fsync_free_shm_idx_request
 {
     struct request_header __header;
