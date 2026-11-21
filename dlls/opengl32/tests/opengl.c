@@ -2384,6 +2384,38 @@ static void test_opengl3(HDC hdc)
         wglDeleteContext(gl3Ctx);
     }
 
+    /* Zero attribute values must survive context recreation when sharing lists. */
+    {
+        int attribs[] = {WGL_CONTEXT_MINOR_VERSION_ARB, 0, WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+                        WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB, 0};
+        HGLRC old_context = wglGetCurrentContext();
+        HDC old_dc = wglGetCurrentDC();
+        HGLRC source, dest;
+        GLint flags = 0;
+        BOOL res;
+
+        source = pwglCreateContextAttribsARB(hdc, 0, attribs);
+        dest = pwglCreateContextAttribsARB(hdc, 0, attribs);
+        ok(!!source, "Failed to create source context, error %#lx.\n", GetLastError());
+        ok(!!dest, "Failed to create destination context, error %#lx.\n", GetLastError());
+        if (source && dest)
+        {
+            res = wglShareLists(source, dest);
+            ok(res, "Failed to share lists, error %#lx.\n", GetLastError());
+            res = wglMakeCurrent(hdc, dest);
+            ok(res, "Failed to make destination context current, error %#lx.\n", GetLastError());
+            if (res)
+            {
+                glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
+                ok(flags & GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT, "Got context flags %#x.\n", flags);
+            }
+            res = wglMakeCurrent(old_dc, old_context);
+            ok(res, "Failed to restore current context, error %#lx.\n", GetLastError());
+        }
+        if (dest) wglDeleteContext(dest);
+        if (source) wglDeleteContext(source);
+    }
+
     /* Test matching an OpenGL 3.0 context with an older one, OpenGL 3.0 should allow it until the new object model is introduced in a future revision */
     {
         HGLRC glCtx = wglCreateContext(hdc);

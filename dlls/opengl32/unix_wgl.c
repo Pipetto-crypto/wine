@@ -581,9 +581,9 @@ static int *memdup_attribs( const int *attribs )
     int *copy;
 
     if (!(attr = attribs)) return NULL;
-    while (*attr++) { /* nothing */ }
+    while (*attr) attr += 2;
 
-    size = (attr - attribs) * sizeof(*attr);
+    size = (attr - attribs + 1) * sizeof(*attr);
     if (!(copy = malloc( size ))) return NULL;
     memcpy( copy, attribs, size );
     return copy;
