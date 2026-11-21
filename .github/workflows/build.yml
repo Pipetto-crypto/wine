@@ -465,6 +465,9 @@ jobs:
       - name: 安装
         run: make -C build-wow64 install
 
+      - name: 修复 Termux Wine 启动入口
+        run: python3 ci/fix_termux_launchers.py "${PREFIX}"
+
       # winedmo.so 是 x86-64 ELF，设备侧由 box64 加载。box64 不读 glibc 的
       # ld.so.cache，只认 BOX64_LD_LIBRARY_PATH 和 ELF 自身的 RPATH，而 Wine
       # 的 unix 库链接时不带 rpath（UNIXLDFLAGS 只有 -shared -Wl,-Bsymbolic
