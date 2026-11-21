@@ -1645,8 +1645,13 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
         loadorder = LO_BUILTIN;  /* builtin with no fallback since mapping a fake dll is not useful */
     }
 
-    if (is_arm64ec() && image_info->is_hybrid && search_machine == IMAGE_FILE_MACHINE_AMD64)
-        search_machine = current_machine;
+    if (current_machine == IMAGE_FILE_MACHINE_ARM64 && search_machine == IMAGE_FILE_MACHINE_AMD64)
+    {
+        /* Force the x64 view when replacing a non-hybrid x64 image. */
+        if (!image_info->is_hybrid && !machine) machine = IMAGE_FILE_MACHINE_AMD64;
+        /* The ARM64X builtin lives in the aarch64 directory. */
+        search_machine = IMAGE_FILE_MACHINE_ARM64;
+    }
 
     switch (loadorder)
     {
