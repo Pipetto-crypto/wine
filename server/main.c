@@ -42,6 +42,7 @@
 #include "unicode.h"
 #include "security.h"
 
+#include "esync.h"
 #include "fsync.h"
 
 /* command-line options */
@@ -264,6 +265,8 @@ int main( int argc, char *argv[] )
 
     if (do_fsync())
         fsync_init();
+    else if (do_esync())
+        esync_init();
 
     if (debug_level) fprintf( stderr, "wineserver: starting (pid=%ld)\n", (long) getpid() );
     set_current_time();
