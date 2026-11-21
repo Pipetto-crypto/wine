@@ -605,6 +605,7 @@ struct test_fontenumerator
 
     DWORD index;
     IDWriteFontFile *font_file;
+    IDWriteFontFile *second_file;
 };
 
 static inline struct test_fontenumerator *impl_from_IDWriteFontFileEnumerator(IDWriteFontFileEnumerator* iface)
@@ -636,6 +637,8 @@ static ULONG WINAPI singlefontfileenumerator_Release(IDWriteFontFileEnumerator *
     if (!ref)
     {
         IDWriteFontFile_Release(enumerator->font_file);
+        if (enumerator->second_file)
+            IDWriteFontFile_Release(enumerator->second_file);
         free(enumerator);
     }
     return ref;
@@ -644,8 +647,8 @@ static ULONG WINAPI singlefontfileenumerator_Release(IDWriteFontFileEnumerator *
 static HRESULT WINAPI singlefontfileenumerator_GetCurrentFontFile(IDWriteFontFileEnumerator *iface, IDWriteFontFile **font_file)
 {
     struct test_fontenumerator *This = impl_from_IDWriteFontFileEnumerator(iface);
-    IDWriteFontFile_AddRef(This->font_file);
-    *font_file = This->font_file;
+    *font_file = This->index == 2 && This->second_file ? This->second_file : This->font_file;
+    IDWriteFontFile_AddRef(*font_file);
     return S_OK;
 }
 
@@ -693,6 +696,7 @@ struct test_fontcollectionloader
 {
     IDWriteFontCollectionLoader IDWriteFontFileCollectionLoader_iface;
     IDWriteFontFileLoader *loader;
+    IDWriteFontFile *second_file;
 };
 
 static inline struct test_fontcollectionloader *impl_from_IDWriteFontFileCollectionLoader(IDWriteFontCollectionLoader* iface)
@@ -733,6 +737,12 @@ static HRESULT WINAPI resourcecollectionloader_CreateEnumeratorFromKey(IDWriteFo
 
     hr = create_enumerator(font_file, fontFileEnumerator);
     ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    if (SUCCEEDED(hr) && This->second_file)
+    {
+        struct test_fontenumerator *enumerator = impl_from_IDWriteFontFileEnumerator(*fontFileEnumerator);
+        enumerator->second_file = This->second_file;
+        IDWriteFontFile_AddRef(enumerator->second_file);
+    }
 
     IDWriteFontFile_Release(font_file);
     return hr;
@@ -3262,6 +3272,113 @@ static const struct IDWriteFontFileLoaderVtbl dwritefontfileloadervtbl = {
     fontfileloader_Release,
     fontfileloader_CreateStreamFromKey
 };
+
+static void test_CustomFontCollection_unsupported(void)
+{
+    IDWriteFontFileLoader file_loader = { &dwritefontfileloadervtbl };
+    struct test_fontcollectionloader collection_loader = { { &resourcecollectionloadervtbl }, &file_loader };
+    IDWriteFontCollectionLoader *loader = &collection_loader.IDWriteFontFileCollectionLoader_iface;
+    IDWriteFontCollection *collection;
+    IDWriteFontFamily *family;
+    IDWriteFontFace *face;
+    IDWriteFont *font;
+    HRSRC resource;
+    DWRITE_FONT_FILE_TYPE file_type;
+    DWRITE_FONT_FACE_TYPE face_type;
+    IDWriteFactory *factory;
+    IDWriteFontFile *file;
+    UINT32 count, index;
+    BOOL supported, exists;
+    HRESULT hr;
+
+    factory = create_factory();
+
+    hr = IDWriteFactory_RegisterFontFileLoader(factory, &file_loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IDWriteFactory_RegisterFontCollectionLoader(factory, loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    hr = IDWriteFactory_CreateCustomFontFileReference(factory, "test", 4, &file_loader, &file);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    supported = TRUE;
+    count = 1;
+    hr = IDWriteFontFile_Analyze(file, &supported, &file_type, &face_type, &count);
+    ok(hr == 0x8faecafe, "Unexpected hr %#lx.\n", hr);
+    ok(!supported, "Unexpected value %d.\n", supported);
+    ok(!count, "Unexpected face count %u.\n", count);
+    IDWriteFontFile_Release(file);
+
+    /* An enumerator yielding unsupported files still produces a valid, empty collection. */
+    collection = NULL;
+    hr = IDWriteFactory_CreateCustomFontCollection(factory, loader, "test", 4, &collection);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(collection != NULL, "Expected a collection.\n");
+    if (SUCCEEDED(hr) && collection)
+    {
+        count = IDWriteFontCollection_GetFontFamilyCount(collection);
+        ok(!count, "Unexpected family count %u.\n", count);
+
+        index = 0;
+        exists = TRUE;
+        hr = IDWriteFontCollection_FindFamilyName(collection, L"wine_test", &index, &exists);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(!exists, "Unexpected family found.\n");
+        ok(index == ~0u, "Unexpected family index %u.\n", index);
+        IDWriteFontCollection_Release(collection);
+    }
+
+    /* A rejected first file must not prevent subsequent valid files from being added. */
+    hr = IDWriteFactory_RegisterFontFileLoader(factory, &rloader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    resource = FindResourceA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(1), (LPCSTR)RT_RCDATA);
+    ok(resource != NULL, "Failed to find font resource.\n");
+    hr = IDWriteFactory_CreateCustomFontFileReference(factory, &resource, sizeof(resource), &rloader,
+            &collection_loader.second_file);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+    collection = NULL;
+    hr = IDWriteFactory_CreateCustomFontCollection(factory, loader, "mixed", 5, &collection);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(collection != NULL, "Expected a collection.\n");
+    if (SUCCEEDED(hr) && collection)
+    {
+        count = IDWriteFontCollection_GetFontFamilyCount(collection);
+        ok(count == 1, "Unexpected family count %u.\n", count);
+        index = ~0u;
+        exists = FALSE;
+        hr = IDWriteFontCollection_FindFamilyName(collection, L"wine_test", &index, &exists);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        ok(exists, "Expected wine_test family.\n");
+        ok(!index, "Unexpected family index %u.\n", index);
+
+        hr = IDWriteFontCollection_GetFontFamily(collection, 0, &family);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = IDWriteFontFamily_GetFont(family, 0, &font);
+            ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+            if (SUCCEEDED(hr))
+            {
+                hr = IDWriteFont_CreateFontFace(font, &face);
+                ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+                if (SUCCEEDED(hr)) IDWriteFontFace_Release(face);
+                IDWriteFont_Release(font);
+            }
+            IDWriteFontFamily_Release(family);
+        }
+        IDWriteFontCollection_Release(collection);
+    }
+    IDWriteFontFile_Release(collection_loader.second_file);
+
+    hr = IDWriteFactory_UnregisterFontFileLoader(factory, &rloader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IDWriteFactory_UnregisterFontCollectionLoader(factory, loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    hr = IDWriteFactory_UnregisterFontFileLoader(factory, &file_loader);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    IDWriteFactory_Release(factory);
+}
 
 static void test_CreateCustomFontFileReference(void)
 {
@@ -10702,6 +10819,7 @@ START_TEST(font)
     test_system_fontcollection();
     test_ConvertFontFaceToLOGFONT();
     test_CustomFontCollection();
+    test_CustomFontCollection_unsupported();
     test_CreateCustomFontFileReference();
     test_CreateFontFileReference();
     test_shared_isolated();
