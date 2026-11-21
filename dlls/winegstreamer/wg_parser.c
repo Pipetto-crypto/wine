@@ -159,9 +159,18 @@ static struct wg_parser_stream *get_stream(wg_parser_stream_t stream)
 static bool caps_is_compressed(GstCaps *caps)
 {
     struct wg_format format;
+    const GstStructure *structure;
 
     if (!caps || gst_caps_is_empty(caps) || gst_caps_is_any(caps))
         return false;
+
+    structure = gst_caps_get_structure(caps, 0);
+    /* AV1 media types are exposed by the decoder, but wg_format does not have
+     * an AV1 mapping. Still treat elementary AV1 caps as encoded payload so
+     * decodebin gets a chance to decode them. Keep unknown container caps
+     * unmapped; several demuxers advertise their container on stream pads. */
+    if (!strcmp(gst_structure_get_name(structure), "video/x-av1"))
+        return true;
 
     wg_format_from_caps(&format, caps);
 
