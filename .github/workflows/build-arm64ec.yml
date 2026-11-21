@@ -63,12 +63,13 @@ jobs:
         working-directory: build-arm64ec
         run: make -j"$(nproc)" dlls/ntdll/ntdll.so server/wineserver 2>&1 | tee unix-build.log
 
-      - name: Build PE ntdll and regression test executables
+      - name: Build PE core DLLs and regression test executables
         working-directory: build-arm64ec
         run: |
           # makedep puts the combined ARM64X binaries in aarch64-windows.
           make -j"$(nproc)" --output-sync=target \
             dlls/ntdll/aarch64-windows/ntdll.dll \
+            dlls/kernelbase/aarch64-windows/kernelbase.dll \
             dlls/ntdll/tests/aarch64-windows/ntdll_test.exe \
             dlls/ntdll/i386-windows/ntdll.dll \
             dlls/ntdll/tests/i386-windows/ntdll_test.exe 2>&1 | tee pe-build.log
@@ -85,6 +86,7 @@ jobs:
 
           mkdir pe-reports
           for file in dlls/ntdll/aarch64-windows/ntdll.dll \
+                      dlls/kernelbase/aarch64-windows/kernelbase.dll \
                       dlls/ntdll/tests/aarch64-windows/ntdll_test.exe; do
             report="pe-reports/arm64x-${file##*/}.txt"
             llvm-readobj --file-headers --coff-load-config "$file" > "$report"
@@ -94,6 +96,7 @@ jobs:
             require_field '^CHPEMetadata \[$' "$report"
             require_field '^  Version: 0x2$' "$report"
             require_field '^  Arm64X \[$' "$report"
+            require_field '^    Entry \[$' "$report"
             require_field ' - 0x[0-9A-Fa-f]+ +ARM64EC$' "$report"
           done
 
@@ -127,4 +130,5 @@ jobs:
             build-arm64ec/*.log
             build-arm64ec/pe-reports/
             build-arm64ec/dlls/ntdll/*-windows/ntdll.dll
+            build-arm64ec/dlls/kernelbase/aarch64-windows/kernelbase.dll
             build-arm64ec/dlls/ntdll/tests/*-windows/ntdll_test.exe
