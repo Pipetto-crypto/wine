@@ -34,9 +34,14 @@
 #include "thread.h"
 #include "user.h"
 
+#include "esync.h"
 #include "fsync.h"
 
 #include "ntsync_tmp.h"
+
+#ifdef HAVE_SYS_EVENTFD_H
+# include <sys/eventfd.h>
+#endif
 
 #ifdef NTSYNC_IOC_EVENT_READ
 
@@ -60,6 +65,7 @@ int get_inproc_device_fd(void)
             fprintf( stderr, "ntsync: up and running.\n" );
         }
         else if (do_fsync()) fd = FSYNC_USED_BY_SERVER;
+        else if (do_esync()) fd = ESYNC_USED_BY_SERVER;
         else fprintf( stderr, "wineserver: using server-side synchronization.\n" );
     }
     return fd;
@@ -70,6 +76,7 @@ struct inproc_sync
     struct object          obj;  /* object header */
     enum inproc_sync_type  type;
     int                    fd;
+    unsigned int           esync_shm_idx;  /* ESYNC SHM INDEX */
     struct list            entry;
 };
 
@@ -121,6 +128,13 @@ struct inproc_sync *create_inproc_internal_sync( int manual, int signaled )
         event->type = manual ? FSYNC_MANUAL_SERVER : FSYNC_AUTO_SERVER;
         event->fd = fsync_alloc_shm( signaled, 0xdeadbeef );
     }
+    else if (do_esync())
+    {
+        event->type = manual ? ESYNC_MANUAL_SERVER : ESYNC_AUTO_SERVER;
+        event->fd = eventfd( signaled ? 1 : 0, EFD_CLOEXEC | EFD_NONBLOCK );
+        if (event->fd != -1)
+            event->esync_shm_idx = esync_alloc_shm( event->fd, event->type, signaled, 0 );
+    }
     else
     {
         event->type = INPROC_SYNC_INTERNAL;
@@ -148,6 +162,13 @@ struct inproc_sync *create_inproc_event_sync( int manual, int signaled )
         event->type = manual ? FSYNC_MANUAL_EVENT : FSYNC_AUTO_EVENT;
         event->fd = fsync_alloc_shm( signaled, 0xdeadbeef );
     }
+    else if (do_esync())
+    {
+        event->type = manual ? ESYNC_MANUAL_EVENT : ESYNC_AUTO_EVENT;
+        event->fd = eventfd( signaled ? 1 : 0, EFD_CLOEXEC | EFD_NONBLOCK );
+        if (event->fd != -1)
+            event->esync_shm_idx = esync_alloc_shm( event->fd, event->type, signaled, 0 );
+    }
     else
     {
         event->type = INPROC_SYNC_EVENT;
@@ -174,6 +195,13 @@ struct inproc_sync *create_inproc_mutex_sync( thread_id_t owner, unsigned int co
     {
         mutex->type = FSYNC_MUTEX;
         mutex->fd = fsync_alloc_shm( owner, count );
+    }
+    else if (do_esync())
+    {
+        mutex->type = ESYNC_MUTEX;
+        mutex->fd = eventfd( owner == 0 ? 1 : 0, EFD_CLOEXEC | EFD_NONBLOCK );
+        if (mutex->fd != -1)
+            mutex->esync_shm_idx = esync_alloc_shm( mutex->fd, mutex->type, owner == 0 ? 1 : 0, 0 );
     }
     else
     {
@@ -203,6 +231,13 @@ struct inproc_sync *create_inproc_semaphore_sync( unsigned int initial, unsigned
         sem->type = FSYNC_SEMAPHORE;
         sem->fd = fsync_alloc_shm( initial, max );
     }
+    else if (do_esync())
+    {
+        sem->type = ESYNC_SEMAPHORE;
+        sem->fd = eventfd( initial, EFD_CLOEXEC | EFD_NONBLOCK | EFD_SEMAPHORE );
+        if (sem->fd != -1)
+            sem->esync_shm_idx = esync_alloc_shm( sem->fd, sem->type, initial, max );
+    }
     else
     {
         sem->type = INPROC_SYNC_SEMAPHORE;
@@ -231,6 +266,7 @@ void signal_inproc_sync( struct inproc_sync *sync )
     __u32 count;
     if (debug_level) fprintf( stderr, "set_inproc_event %d\n", sync->fd );
     if (do_fsync()) fsync_set_event( sync->fd );
+    else if (do_esync()) esync_set_event( sync->fd, sync->esync_shm_idx, sync->type );
     else            ioctl( sync->fd, NTSYNC_IOC_EVENT_SET, &count );
 }
 
@@ -239,6 +275,7 @@ void reset_inproc_sync( struct inproc_sync *sync )
     __u32 count;
     if (debug_level) fprintf( stderr, "reset_inproc_event %d\n", sync->fd );
     if (do_fsync()) fsync_reset_event( sync->fd );
+    else if (do_esync()) esync_reset_event( sync->fd, sync->esync_shm_idx, sync->type );
     else            ioctl( sync->fd, NTSYNC_IOC_EVENT_RESET, &count );
 }
 
@@ -247,7 +284,7 @@ static int inproc_sync_signal( struct object *obj, unsigned int access, int sign
     struct inproc_sync *sync = (struct inproc_sync *)obj;
     assert( obj->ops == &inproc_sync_ops );
 
-    if (!do_fsync())
+    if (!do_fsync() && !do_esync())
         assert( sync->type == INPROC_SYNC_INTERNAL || sync->type == INPROC_SYNC_EVENT ); /* never called for mutex / semaphore */
     assert( signal == 0 || signal == 1 ); /* never called from signal_object */
 
@@ -275,12 +312,18 @@ void abandon_inproc_mutexes( thread_id_t tid )
             fsync_abandon_mutex( mutex->fd, tid );
         return;
     }
+    else if (do_esync())
+    {
+        LIST_FOR_EACH_ENTRY( mutex, &inproc_mutexes, struct inproc_sync, entry )
+            esync_abandon_mutex( mutex->fd, mutex->esync_shm_idx, tid );
+        return;
+    }
 
     LIST_FOR_EACH_ENTRY( mutex, &inproc_mutexes, struct inproc_sync, entry )
         ioctl( mutex->fd, NTSYNC_IOC_MUTEX_KILL, &tid );
 }
 
-static int get_obj_inproc_sync( struct object *obj, int *type )
+static int get_obj_inproc_sync( struct object *obj, int *type, unsigned int *esync_shm_idx )
 {
     struct object *sync;
     int fd = -1;
@@ -290,6 +333,7 @@ static int get_obj_inproc_sync( struct object *obj, int *type )
     {
         struct inproc_sync *inproc = (struct inproc_sync *)sync;
         *type = inproc->type;
+        if (esync_shm_idx) *esync_shm_idx = inproc->esync_shm_idx;
         fd = inproc->fd;
     }
 
@@ -341,7 +385,7 @@ void abandon_inproc_mutexes( thread_id_t tid )
 {
 }
 
-static int get_obj_inproc_sync( struct object *obj, int *type )
+static int get_obj_inproc_sync( struct object *obj, int *type, unsigned int *esync_shm_idx )
 {
     return -1;
 }
@@ -352,13 +396,19 @@ DECL_HANDLER(get_inproc_sync_fd)
 {
     struct object *obj;
     int fd;
+    unsigned int esync_shm_idx = 0;
 
     if (!(obj = get_handle_obj( current->process, req->handle, 0, NULL ))) return;
 
     reply->access = get_handle_access( current->process, req->handle );
 
-    if ((fd = get_obj_inproc_sync( obj, &reply->type )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
+    if ((fd = get_obj_inproc_sync( obj, &reply->type, &esync_shm_idx )) < 0) set_error( STATUS_NOT_IMPLEMENTED );
     else if (do_fsync()) reply->fsync_shm_idx = fsync_grab_shm_idx( fd );
+    else if (do_esync())
+    {
+        reply->fsync_shm_idx = esync_shm_idx;
+        send_client_fd( current->process, fd, req->handle );
+    }
     else send_client_fd( current->process, fd, req->handle );
 
     release_object( obj );

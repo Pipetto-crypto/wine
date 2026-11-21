@@ -15,6 +15,7 @@ SOURCES = \
 	event.c \
 	fd.c \
 	file.c \
+	esync.c \
 	fsync.c \
 	handle.c \
 	hook.c \

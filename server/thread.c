@@ -61,6 +61,7 @@
 #include "user.h"
 #include "security.h"
 
+#include "esync.h"
 #include "fsync.h"
 
 /* thread queues */
@@ -1853,6 +1854,11 @@ DECL_HANDLER(init_first_thread)
     if (do_fsync())
     {
         reply->inproc_device = FSYNC_USED_BY_SERVER;
+    }
+    else if (do_esync())
+    {
+        reply->inproc_device = ESYNC_USED_BY_SERVER;
+        send_client_fd( process, esync_get_shm_fd(), reply->inproc_device );
     }
     else if ((fd = get_inproc_device_fd()) >= 0)
     {

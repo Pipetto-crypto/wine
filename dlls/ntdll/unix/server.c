@@ -86,6 +86,7 @@
 #include "unix_private.h"
 #include "ddk/wdm.h"
 
+#include "esync.h"
 #include "fsync.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(server);
@@ -1750,6 +1751,11 @@ size_t server_init_process(void)
             {
                 inproc_device_fd = FSYNC_USED_BY_SERVER;
                 fsync_init( pid );
+            }
+            else if (reply->inproc_device == ESYNC_USED_BY_SERVER)
+            {
+                int shm_fd = wine_server_receive_fd( &handle );
+                esync_init( shm_fd );
             }
             else if (reply->inproc_device)
             {
