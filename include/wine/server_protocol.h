@@ -6331,7 +6331,6 @@ struct d3dkmt_mutex_release_reply
 
 
 #define FSYNC_SHM_PAGE_SIZE 0x10000
-#define ESYNC_USED_BY_SERVER 0x7eadeeee
 #define FSYNC_USED_BY_SERVER 0x7eadfeef
 
 enum fsync_type
