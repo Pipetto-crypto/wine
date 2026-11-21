@@ -455,7 +455,6 @@ static HRESULT layout_update_breakpoints_range(struct dwrite_textlayout *layout,
             layout->actual_breakpoints[i].breakConditionAfter = DWRITE_BREAK_CONDITION_MAY_NOT_BREAK;
         }
 
-        layout->actual_breakpoints[i].isWhitespace = 0;
         layout->actual_breakpoints[i].isSoftHyphen = 0;
     }
 
@@ -1186,7 +1185,9 @@ static HRESULT layout_compute_runs(struct dwrite_textlayout *layout)
         DWRITE_FONT_METRICS fontmetrics = { 0 };
 
         /* we need to do very little in case of inline objects */
-        if (r->kind == LAYOUT_RUN_INLINE) {
+        if (r->kind == LAYOUT_RUN_INLINE)
+        {
+            DWRITE_LINE_BREAKPOINT bp = get_effective_breakpoint(layout, r->start_position);
             DWRITE_CLUSTER_METRICS *metrics = &layout->clustermetrics[cluster];
             struct layout_cluster *c = &layout->clusters[cluster];
             DWRITE_INLINE_OBJECT_METRICS inlinemetrics;
@@ -1194,7 +1195,7 @@ static HRESULT layout_compute_runs(struct dwrite_textlayout *layout)
             metrics->width = 0.0f;
             metrics->length = r->u.object.length;
             metrics->canWrapLineAfter = 0;
-            metrics->isWhitespace = 0;
+            metrics->isWhitespace = bp.isWhitespace;
             metrics->isNewline = 0;
             metrics->isSoftHyphen = 0;
             metrics->isRightToLeft = 0;
@@ -1951,7 +1952,7 @@ static void layout_add_line(struct dwrite_textlayout *layout, UINT32 first_clust
 
         /* Every isNewline cluster is also isWhitespace, but not every
            newline character cluster has isNewline set, so go back to original string. */
-        ch = lc->run->u.regular.descr.string[lc->position];
+        ch = layout->str[lc->run->start_position + lc->position];
         if (cluster->length == 1 && lb_is_newline_char(ch))
             metrics.newlineLength += cluster->length;
 
