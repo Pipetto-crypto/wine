@@ -1092,12 +1092,21 @@ static void build_spec_obj( const char *spec_file, const char *output_file,
 {
     struct strarray spec_args = get_winebuild_args( target_name );
     struct strarray tool;
-    const char *spec_o_name, *output_name;
+    struct target spec_target = target;
+    const char *spec_o_name, *output_name, *cc_target_name = target_name;
+
+    if (target_name && !parse_target( target_name, &spec_target ))
+        error( "Invalid target specification '%s'\n", target_name );
 
     /* get the filename from the path */
     output_name = get_basename( output_file );
 
-    tool = build_tool_name( target_name, tool_cc );
+    if (spec_target.cpu == CPU_ARM64EC)
+    {
+        const char *suffix = target_name ? strchr( target_name, '-' ) : NULL;
+        cc_target_name = strmake( "x86_64%s", suffix ? suffix : "" );
+    }
+    tool = build_tool_name( cc_target_name, tool_cc );
     strarray_add( &spec_args, strmake( "--cc-cmd=%s", strarray_tostring( tool, " " )));
     if (!is_pe)
     {
