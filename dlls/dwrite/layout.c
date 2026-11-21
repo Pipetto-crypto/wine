@@ -1945,8 +1945,6 @@ static void layout_add_line(struct dwrite_textlayout *layout, UINT32 first_clust
         struct layout_cluster *lc = &layout->clusters[index];
         WCHAR ch;
 
-        /* This also filters out clusters added from inline objects, those are never
-           treated as a white space. */
         if (!cluster->isWhitespace)
             break;
 

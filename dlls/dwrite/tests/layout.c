@@ -2879,6 +2879,38 @@ static void test_GetClusterMetrics(void)
 
     IDWriteTextLayout_Release(layout);
 
+    /* An inline object covering a trailing space keeps the whitespace flag. */
+    hr = IDWriteFactory_CreateTextLayout(factory, L"a ", 2, format, 1000.0f, 200.0f, &layout);
+    ok(hr == S_OK, "Failed to create layout, hr %#lx.\n", hr);
+
+    range.startPosition = 1;
+    range.length = 1;
+    hr = IDWriteTextLayout_SetInlineObject(layout, trimm, range);
+    ok(hr == S_OK, "Failed to set inline object, hr %#lx.\n", hr);
+
+    hr = IDWriteTextLayout_GetClusterMetrics(layout, metrics, ARRAY_SIZE(metrics), &count);
+    ok(hr == S_OK, "Failed to get cluster metrics, hr %#lx.\n", hr);
+    ok(count == 2, "Unexpected cluster count %u.\n", count);
+    ok(!metrics[0].isWhitespace, "Unexpected whitespace flag %d.\n", metrics[0].isWhitespace);
+    ok(metrics[1].isWhitespace, "Unexpected whitespace flag %d.\n", metrics[1].isWhitespace);
+    ok(metrics[1].width > 0.0f, "Unexpected inline object width %.8e.\n", metrics[1].width);
+
+    hr = IDWriteTextLayout_GetLineMetrics(layout, &line, 1, &count);
+    ok(hr == S_OK, "Failed to get line metrics, hr %#lx.\n", hr);
+    ok(count == 1, "Unexpected line count %u.\n", count);
+    ok(line.length == 2, "Unexpected line length %u.\n", line.length);
+    ok(line.trailingWhitespaceLength == 1, "Unexpected trailing whitespace length %u.\n",
+            line.trailingWhitespaceLength);
+    ok(!line.newlineLength, "Unexpected newline length %u.\n", line.newlineLength);
+
+    hr = IDWriteTextLayout_GetMetrics(layout, &text_metrics);
+    ok(hr == S_OK, "Failed to get text metrics, hr %#lx.\n", hr);
+    ok(text_metrics.width == metrics[0].width, "Unexpected width %.8e.\n", text_metrics.width);
+    ok(text_metrics.widthIncludingTrailingWhitespace == metrics[0].width + metrics[1].width,
+            "Unexpected width including trailing whitespace %.8e.\n", text_metrics.widthIncludingTrailingWhitespace);
+
+    IDWriteTextLayout_Release(layout);
+
     IDWriteInlineObject_Release(&testinlineobj->IDWriteInlineObject_iface);
     IDWriteInlineObject_Release(&testinlineobj2->IDWriteInlineObject_iface);
     IDWriteInlineObject_Release(&testinlineobj3->IDWriteInlineObject_iface);
