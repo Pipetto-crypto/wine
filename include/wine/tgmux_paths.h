@@ -13,7 +13,8 @@
  *   1. environment variable (runtime override)
  *   2. value baked in from WINE_TGMUX_PREFIX, or WINE_TGMUX_DEFAULT_TMPDIR
  *      for the temp directory, which lives in $PREFIX/tmp rather than in
- *      the glibc prefix.
+ *      the glibc prefix. The machine-id default is fixed independently of
+ *      WINE_TGMUX_PREFIX.
  *
  * WINE_TGMUX_PREFIX can be overridden at configure time, e.g.
  *   CPPFLAGS='-DWINE_TGMUX_PREFIX="/data/data/com.termux/files/usr/glibc"'
@@ -66,15 +67,13 @@ static inline const char *tgmux_sysconfdir(void)
 }
 
 /*
- * D-Bus machine-id. On a normal Linux host this lives at
- * /var/lib/dbus/machine-id, but Wine also consults /etc/machine-id, and on
- * Termux glibc the whole sysconf tree (including machine-id) lives under the
- * glibc prefix, so resolve it through sysconfdir. Allow a dedicated override
- * for setups that place it elsewhere.
+ * All machine-id readers share this single default, independent of
+ * WINE_TGMUX_PREFIX and WINE_SYSCONF_DIR. Do not probe other host paths.
+ * WINE_MACHINE_ID remains an explicit runtime override.
  */
 static inline const char *tgmux_machine_id(void)
 {
-    return tgmux_env( "WINE_MACHINE_ID", WINE_TGMUX_PATH( "/etc/machine-id" ) );
+    return tgmux_env( "WINE_MACHINE_ID", "/data/data/com.termux/files/usr/glibc/etc/machine-id" );
 }
 
 static inline const char *tgmux_datadir(void)
