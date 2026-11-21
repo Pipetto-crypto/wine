@@ -76,8 +76,27 @@ static HRESULT video_format_from_media_type(IMFMediaType *media_type, MFVIDEOFOR
     if (FAILED(hr = MFCreateMFVideoFormatFromMFMediaType(media_type, format, format_size)))
         return hr;
 
+    if (IsEqualGUID(&subtype, &MFVideoFormat_HEVC) || IsEqualGUID(&subtype, &MFVideoFormat_HEVC_ES))
+    {
+        struct hevc_video_format *hevc;
+        UINT32 profile = 0;
+
+        /* HEVC input carries parameter sets in-band. Only append the
+         * profile attribute, which MFVIDEOFORMAT itself cannot represent. */
+        if (!(hevc = CoTaskMemRealloc(*format, sizeof(*hevc))))
+        {
+            CoTaskMemFree(*format);
+            return E_OUTOFMEMORY;
+        }
+        IMFMediaType_GetUINT32(media_type, &MF_MT_MPEG2_PROFILE, &profile);
+        hevc->hdr.dwSize = sizeof(*hevc);
+        hevc->profile = profile;
+        hevc->__pad = 0;
+        *format = &hevc->hdr;
+        *format_size = sizeof(*hevc);
+    }
     /* fixup MPEG video formats here, so we can consistently use MFVIDEOFORMAT internally */
-    if (IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG1Payload)
+    else if (IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG1Payload)
             || IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG1Packet)
             || IsEqualGUID(&subtype, &MEDIASUBTYPE_MPEG2_VIDEO))
     {
@@ -1112,6 +1131,16 @@ static const REGFILTER2 reg_decodebin_parser =
 
 HRESULT WINAPI DllRegisterServer(void)
 {
+    MFT_REGISTER_TYPE_INFO hevc_decoder_inputs[] =
+    {
+        {MFMediaType_Video, MFVideoFormat_HEVC},
+        {MFMediaType_Video, MFVideoFormat_HEVC_ES},
+    };
+    MFT_REGISTER_TYPE_INFO hevc_decoder_outputs[] =
+    {
+        {MFMediaType_Video, MFVideoFormat_NV12},
+        {MFMediaType_Video, MFVideoFormat_P010},
+    };
     IFilterMapper2 *mapper;
     HRESULT hr;
 
@@ -1129,7 +1158,9 @@ HRESULT WINAPI DllRegisterServer(void)
 
     IFilterMapper2_Release(mapper);
 
-    return S_OK;
+    return MFTRegister(CLSID_MSH265DecoderMFT, MFT_CATEGORY_VIDEO_DECODER, (WCHAR *)L"H.265 Video Decoder MFT",
+            MFT_ENUM_FLAG_SYNCMFT, ARRAY_SIZE(hevc_decoder_inputs), hevc_decoder_inputs,
+            ARRAY_SIZE(hevc_decoder_outputs), hevc_decoder_outputs, NULL);
 }
 
 HRESULT WINAPI DllUnregisterServer(void)
@@ -1150,5 +1181,5 @@ HRESULT WINAPI DllUnregisterServer(void)
 
     IFilterMapper2_Release(mapper);
 
-    return S_OK;
+    return MFTUnregister(CLSID_MSH265DecoderMFT);
 }

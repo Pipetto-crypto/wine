@@ -431,7 +431,7 @@ jobs:
           # This does not run the test suites; make test/check is deliberately separate.
           make -j"$(nproc)"
           for arch in i386 x86_64; do
-            for module in dinput dwrite kernel32 mf mfplat mfsrcsnk ntdll opengl32 quartz user32; do
+            for module in dinput dwrite kernel32 mf mfplat mfreadwrite mfsrcsnk ntdll opengl32 quartz user32; do
               test -s "dlls/${module}/tests/${arch}-windows/${module}_test.exe"
             done
           done
@@ -448,6 +448,7 @@ jobs:
             build-wow64/dlls/kernel32/tests/*-windows/kernel32_test.exe
             build-wow64/dlls/mf/tests/*-windows/mf_test.exe
             build-wow64/dlls/mfplat/tests/*-windows/mfplat_test.exe
+            build-wow64/dlls/mfreadwrite/tests/*-windows/mfreadwrite_test.exe
             build-wow64/dlls/mfsrcsnk/tests/*-windows/mfsrcsnk_test.exe
             build-wow64/dlls/ntdll/tests/*-windows/ntdll_test.exe
             build-wow64/dlls/opengl32/tests/*-windows/opengl32_test.exe

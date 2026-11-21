@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "codecapi.h"
+
 #include "wine/list.h"
 #include "wine/debug.h"
 #include "wine/winedmo.h"
@@ -292,6 +294,7 @@ struct media_source
         SOURCE_RUNNING,
         SOURCE_SHUTDOWN,
     } state;
+    HRESULT read_error;
     UINT pending_reads;
 };
 
@@ -465,6 +468,20 @@ static HRESULT media_source_start(struct media_source *source, IMFPresentationDe
         position->vt = VT_I8;
         position->hVal.QuadPart = 0;
     }
+    else if (position->vt == VT_EMPTY && FAILED(source->read_error))
+    {
+        return source->read_error;
+    }
+
+    if (position->vt == VT_I8)
+    {
+        if ((status = winedmo_demuxer_seek(source->winedmo_demuxer, position->hVal.QuadPart)))
+        {
+            WARN("Failed to seek to %I64d, status %#lx\n", position->hVal.QuadPart, status);
+            return HRESULT_FROM_NT(status);
+        }
+        source->read_error = S_OK;
+    }
 
     for (i = 0; i < source->stream_count; i++)
     {
@@ -503,8 +520,6 @@ static HRESULT media_source_start(struct media_source *source, IMFPresentationDe
         media_stream_start(stream, source->stream_map[i], position);
     }
 
-    if (position->vt == VT_I8 && (status = winedmo_demuxer_seek(source->winedmo_demuxer, position->hVal.QuadPart)))
-        WARN("Failed to seek to %I64d, status %#lx\n", position->hVal.QuadPart, status);
     source->state = SOURCE_RUNNING;
 
     queue_media_event_value(source->queue, seeking ? MESourceSeeked : MESourceStarted, position);
@@ -515,7 +530,7 @@ static HRESULT media_source_async_start(struct media_source *source, IMFAsyncRes
 {
     struct async_start_params *params;
     IUnknown *state;
-    HRESULT hr;
+    HRESULT hr, event_hr;
 
     if (!(state = IMFAsyncResult_GetStateNoAddRef(result))) return E_INVALIDARG;
     params = async_start_params_from_IUnknown(state);
@@ -523,7 +538,13 @@ static HRESULT media_source_async_start(struct media_source *source, IMFAsyncRes
     EnterCriticalSection(&source->cs);
 
     if (FAILED(hr = media_source_start(source, params->descriptor, &params->format, &params->position)))
+    {
         WARN("Failed to start source %p, hr %#lx\n", source, hr);
+        source->read_error = hr;
+        if (FAILED(event_hr = IMFMediaEventQueue_QueueEventParamVar(source->queue, MEError,
+                &GUID_NULL, hr, NULL)))
+            ERR("Failed to queue source error, hr %#lx\n", event_hr);
+    }
 
     LeaveCriticalSection(&source->cs);
 
@@ -700,13 +721,24 @@ static HRESULT media_source_read(struct media_source *source)
     UINT i, index;
     HRESULT hr;
 
-    if (source->state != SOURCE_RUNNING)
+    if (source->state != SOURCE_RUNNING || FAILED(source->read_error))
         return S_OK;
 
     if (FAILED(hr = demuxer_read_sample(source->winedmo_demuxer, &index, &sample)) && hr != MF_E_END_OF_STREAM)
     {
-        WARN("Failed to read stream %u data, hr %#lx\n", index, hr);
-        return hr;
+        ERR("Failed to read demuxer sample, hr %#lx\n", hr);
+        source->read_error = hr;
+        if (FAILED(hr = IMFMediaEventQueue_QueueEventParamVar(source->queue, MEError,
+                &GUID_NULL, source->read_error, NULL)))
+            ERR("Failed to queue source error, hr %#lx\n", hr);
+        for (i = 0; i < source->stream_count; ++i)
+        {
+            struct media_stream *stream = source->streams[i];
+            if (!stream->active || stream->eos) continue;
+            stream->eos = TRUE;
+            object_queue_clear(&stream->tokens);
+        }
+        return S_OK;
     }
 
     if (hr == MF_E_END_OF_STREAM)
@@ -898,6 +930,9 @@ static HRESULT media_source_request_stream_sample(struct media_source *source, s
         return S_OK;
     }
 
+    if (FAILED(source->read_error))
+        return source->read_error;
+
     if (SUCCEEDED(hr = object_queue_push(&stream->tokens, token)) && source->state == SOURCE_RUNNING)
         queue_media_source_read(source);
     return hr;
@@ -947,6 +982,8 @@ static HRESULT WINAPI media_stream_RequestSample(IMFMediaStream *iface, IUnknown
 
     if (source->state == SOURCE_SHUTDOWN)
         hr = MF_E_SHUTDOWN;
+    else if (FAILED(source->read_error))
+        hr = source->read_error;
     else if (!stream->active)
         hr = MF_E_MEDIA_SOURCE_WRONGSTATE;
     else if (stream->eos)
@@ -1570,12 +1607,14 @@ static HRESULT media_type_from_winedmo_format( GUID major, union winedmo_format 
 static HRESULT get_stream_media_type(struct winedmo_demuxer demuxer, UINT index, GUID *major, IMFMediaType **media_type)
 {
     union winedmo_format *format;
+    enum winedmo_video_profile profile;
+    UINT32 mf_profile = 0;
     NTSTATUS status;
     HRESULT hr;
 
     TRACE("demuxer %p, index %u, media_type %p\n", &demuxer, index, media_type);
 
-    if ((status = winedmo_demuxer_stream_type(demuxer, index, major, &format)))
+    if ((status = winedmo_demuxer_stream_type(demuxer, index, major, &format, &profile)))
     {
         WARN("Failed to get stream %u type, status %#lx\n", index, status);
         return HRESULT_FROM_NT(status);
@@ -1583,6 +1622,27 @@ static HRESULT get_stream_media_type(struct winedmo_demuxer demuxer, UINT index,
 
     hr = media_type ? media_type_from_winedmo_format(*major, format, media_type) : S_OK;
     free(format);
+    if (!media_type || FAILED(hr)) return hr;
+
+    switch (profile)
+    {
+    case WINEDMO_VIDEO_PROFILE_HEVC_MAIN:
+        mf_profile = eAVEncH265VProfile_Main_420_8;
+        break;
+    case WINEDMO_VIDEO_PROFILE_HEVC_MAIN_10:
+        mf_profile = eAVEncH265VProfile_Main_420_10;
+        break;
+    case WINEDMO_VIDEO_PROFILE_HEVC_MAIN_STILL_PICTURE:
+        mf_profile = eAVEncH265VProfile_MainStill_420_8;
+        break;
+    case WINEDMO_VIDEO_PROFILE_UNKNOWN:
+        break;
+    }
+    if (mf_profile && FAILED(hr = IMFMediaType_SetUINT32(*media_type, &MF_MT_MPEG2_PROFILE, mf_profile)))
+    {
+        IMFMediaType_Release(*media_type);
+        *media_type = NULL;
+    }
     return hr;
 }
 

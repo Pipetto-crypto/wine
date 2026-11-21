@@ -34,6 +34,14 @@ union winedmo_format
     MFVIDEOFORMAT video;
 };
 
+enum winedmo_video_profile
+{
+    WINEDMO_VIDEO_PROFILE_UNKNOWN,
+    WINEDMO_VIDEO_PROFILE_HEVC_MAIN,
+    WINEDMO_VIDEO_PROFILE_HEVC_MAIN_10,
+    WINEDMO_VIDEO_PROFILE_HEVC_MAIN_STILL_PICTURE,
+};
+
 struct winedmo_stream
 {
     NTSTATUS (CDECL *p_seek)( struct winedmo_stream *stream, UINT64 *pos );
@@ -51,6 +59,6 @@ NTSTATUS CDECL winedmo_demuxer_seek( struct winedmo_demuxer demuxer, INT64 times
 NTSTATUS CDECL winedmo_demuxer_stream_lang( struct winedmo_demuxer demuxer, UINT stream, WCHAR *buffer, UINT len );
 NTSTATUS CDECL winedmo_demuxer_stream_name( struct winedmo_demuxer demuxer, UINT stream, WCHAR *buffer, UINT len );
 NTSTATUS CDECL winedmo_demuxer_stream_type( struct winedmo_demuxer demuxer, UINT stream,
-                                            GUID *major, union winedmo_format **format );
+                                            GUID *major, union winedmo_format **format, enum winedmo_video_profile *profile );
 
 #endif /* __WINE_WINEDMO_H */

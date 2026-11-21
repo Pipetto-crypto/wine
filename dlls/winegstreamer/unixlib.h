@@ -48,6 +48,15 @@ struct mpeg_video_format
 
 C_ASSERT(sizeof(struct mpeg_video_format) == offsetof(struct mpeg_video_format, sequence_header[0]));
 
+struct hevc_video_format
+{
+    MFVIDEOFORMAT hdr;
+    UINT32 profile;
+    UINT32 __pad;
+};
+
+C_ASSERT(sizeof(struct hevc_video_format) == sizeof(MFVIDEOFORMAT) + 8);
+
 struct wg_media_type
 {
     GUID major;

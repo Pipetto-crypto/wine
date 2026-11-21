@@ -1795,6 +1795,57 @@ HRESULT h264_decoder_create(REFIID riid, void **out)
     return hr;
 }
 
+static const GUID *const hevc_decoder_input_types[] =
+{
+    &MFVideoFormat_HEVC,
+    &MFVideoFormat_HEVC_ES,
+};
+
+static const GUID *const hevc_decoder_output_types[] =
+{
+    &MFVideoFormat_NV12,
+    &MFVideoFormat_P010,
+};
+
+HRESULT hevc_decoder_create(REFIID riid, void **out)
+{
+    const MFVIDEOFORMAT input_format =
+    {
+        .dwSize = sizeof(MFVIDEOFORMAT),
+        .guidFormat = MFVideoFormat_HEVC,
+    };
+    const MFVIDEOFORMAT output_format =
+    {
+        .dwSize = sizeof(MFVIDEOFORMAT),
+        .videoInfo = {.dwWidth = 1920, .dwHeight = 1080},
+        .guidFormat = MFVideoFormat_NV12,
+    };
+    struct video_decoder *decoder;
+    HRESULT hr;
+
+    TRACE("riid %s, out %p.\n", debugstr_guid(riid), out);
+
+    if (FAILED(hr = check_video_transform_support(&input_format, &output_format)))
+    {
+        ERR_(winediag)("GStreamer doesn't support HEVC decoding, please install appropriate plugins\n");
+        return hr;
+    }
+
+    if (FAILED(hr = video_decoder_create_with_types(hevc_decoder_input_types, ARRAY_SIZE(hevc_decoder_input_types),
+            hevc_decoder_output_types, ARRAY_SIZE(hevc_decoder_output_types), NULL, &decoder)))
+        return hr;
+
+    decoder->input_info.dwFlags = MFT_INPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER;
+    decoder->output_info.dwFlags = MFT_OUTPUT_STREAM_WHOLE_SAMPLES | MFT_OUTPUT_STREAM_SINGLE_SAMPLE_PER_BUFFER
+            | MFT_OUTPUT_STREAM_FIXED_SAMPLE_SIZE;
+    decoder->output_info.cbSize = 1920 * 1080 * 3;
+    decoder->wg_transform_attrs.allow_format_change = TRUE;
+
+    hr = IMFTransform_QueryInterface(&decoder->IMFTransform_iface, riid, out);
+    IMFTransform_Release(&decoder->IMFTransform_iface);
+    return hr;
+}
+
 extern GUID MFVideoFormat_IV50;
 static const GUID *const iv50_decoder_input_types[] =
 {

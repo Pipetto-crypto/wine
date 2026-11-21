@@ -116,6 +116,12 @@ coclass wg_h264_decoder {}
 
 [
     threading(both),
+    uuid(420a51a3-d605-430c-b4fc-45274fa6c562)
+]
+coclass MSH265DecoderMFT {}
+
+[
+    threading(both),
     uuid(6c34de69-4670-46cd-8cb4-1f2fa1dffb65)
 ]
 coclass wg_h264_encoder {}

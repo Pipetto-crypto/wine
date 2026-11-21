@@ -25,3 +25,17 @@ test.wav RCDATA test.wav
 /* ffmpeg -f lavfi -i smptebars -f lavfi -i "sine=frequency=1000" -t 1.0 -r 25 -f mp4 -vcodec h264 -vf scale=160x120 -acodec aac test.mp4 */
 /* @makedep: test.mp4 */
 test.mp4 RCDATA test.mp4
+
+/* Generated using the imageio-ffmpeg 0.7.0 manylinux2014_aarch64 wheel's
+ * FFmpeg 7.0.2-static binary (libx265):
+ * ffmpeg -f lavfi -i 'smptebars=size=64x64:rate=2:duration=2' -frames:v 4 -an \
+ *     -c:v libx265 -preset ultrafast -pix_fmt yuv420p -profile:v main -tag:v hvc1 \
+ *     -x265-params 'log-level=error:pools=none:frame-threads=1:wpp=0:keyint=2:min-keyint=2:scenecut=0:open-gop=0:bframes=0:repeat-headers=0:info=0' \
+ *     test-hevc-main.mp4
+ * Change to -pix_fmt yuv420p10le -profile:v main10 and output test-hevc-main10.mp4
+ * for the Main10 asset. Both files are four 64x64 SMPTE-bar frames, no audio,
+ * with IDRs at 0 and 1 seconds and VPS/SPS/PPS stored only in hvcC. */
+/* @makedep: test-hevc-main.mp4 */
+test-hevc-main.mp4 RCDATA test-hevc-main.mp4
+/* @makedep: test-hevc-main10.mp4 */
+test-hevc-main10.mp4 RCDATA test-hevc-main10.mp4

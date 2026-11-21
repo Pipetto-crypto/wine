@@ -144,6 +144,7 @@ class_objects[] =
     { &CLSID_GStreamerSchemePlugin, &gstreamer_scheme_handler_create },
     { &CLSID_wg_aac_decoder, &aac_decoder_create },
     { &CLSID_wg_h264_decoder, &h264_decoder_create },
+    { &CLSID_MSH265DecoderMFT, &hevc_decoder_create },
     { &CLSID_wg_h264_encoder, &h264_encoder_create },
 };
 

@@ -27,6 +27,14 @@
 
 #ifdef HAVE_FFMPEG
 
+#include <libavutil/pixdesc.h>
+
+#ifndef AV_PROFILE_HEVC_MAIN
+#define AV_PROFILE_HEVC_MAIN FF_PROFILE_HEVC_MAIN
+#define AV_PROFILE_HEVC_MAIN_10 FF_PROFILE_HEVC_MAIN_10
+#define AV_PROFILE_HEVC_MAIN_STILL_PICTURE FF_PROFILE_HEVC_MAIN_STILL_PICTURE
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(dmo);
 
 static inline const char *debugstr_averr( int err )
@@ -103,32 +111,67 @@ NTSTATUS demuxer_check( void *arg )
     return format ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
 }
 
+static BOOL is_annexb( const BYTE *data, UINT size )
+{
+    return data && ((size >= 3 && !data[0] && !data[1] && data[2] == 1) ||
+                    (size >= 4 && !data[0] && !data[1] && !data[2] && data[3] == 1));
+}
+
+static int init_stream_filter( struct stream *stream, const AVStream *avstream, const AVBitStreamFilter *filter )
+{
+    int ret;
+
+    if (filter) ret = av_bsf_alloc( filter, &stream->filter );
+    else ret = av_bsf_get_null_filter( &stream->filter );
+    if (ret < 0) return ret;
+
+    if ((ret = avcodec_parameters_copy( stream->filter->par_in, avstream->codecpar )) >= 0)
+    {
+        stream->filter->time_base_in = avstream->time_base;
+        ret = av_bsf_init( stream->filter );
+    }
+    if (ret < 0) av_bsf_free( &stream->filter );
+    return ret;
+}
+
 static NTSTATUS demuxer_create_streams( struct demuxer *demuxer )
 {
     UINT i;
+    int ret;
 
     for (i = 0; i < demuxer->ctx->nb_streams; i++)
     {
-        AVCodecParameters *par = demuxer->ctx->streams[i]->codecpar;
+        AVStream *avstream = demuxer->ctx->streams[i];
+        AVCodecParameters *par = avstream->codecpar;
         struct stream *stream = demuxer->streams + i;
-        const AVBitStreamFilter *filter;
+        const AVBitStreamFilter *filter = NULL;
 
-        if (par->codec_id == AV_CODEC_ID_H264)
+        if (par->codec_id == AV_CODEC_ID_HEVC)
         {
-            if (!(filter = av_bsf_get_by_name( "h264_mp4toannexb" )))
-                ERR( "Failed to find H264 bitstream filter\n" );
-            else
-            {
-                if (av_bsf_alloc( filter, &stream->filter ) < 0) return STATUS_UNSUCCESSFUL;
-                avcodec_parameters_copy( stream->filter->par_in, par );
-                av_bsf_init( stream->filter );
-                continue;
-            }
-        }
+            BOOL annexb = is_annexb( par->extradata, par->extradata_size );
 
-        av_bsf_get_null_filter( &stream->filter );
-        avcodec_parameters_copy( stream->filter->par_in, demuxer->ctx->streams[i]->codecpar );
-        avcodec_parameters_copy( stream->filter->par_out, demuxer->ctx->streams[i]->codecpar );
+            /* Without configuration data the HEVC filter passes packets through.
+             * Validate its output below, so raw Annex B streams remain usable. */
+            if (!(filter = av_bsf_get_by_name( "hevc_mp4toannexb" )))
+                WARN( "Failed to find HEVC bitstream filter for stream %u.\n", i );
+            else if ((ret = init_stream_filter( stream, avstream, filter )) >= 0)
+                continue;
+            else
+                WARN( "Failed to initialize HEVC bitstream filter for stream %u, error %s.\n", i, debugstr_averr(ret) );
+
+            /* A failed converter must not expose length-prefixed HEVC as
+             * MFVideoFormat_HEVC. Leave only this stream unsupported. */
+            if (!annexb) continue;
+            filter = NULL;
+        }
+        else if (par->codec_id == AV_CODEC_ID_H264 && !(filter = av_bsf_get_by_name( "h264_mp4toannexb" )))
+            ERR( "Failed to find H264 bitstream filter\n" );
+
+        if ((ret = init_stream_filter( stream, avstream, filter )) < 0)
+        {
+            ERR( "Failed to initialize stream %u bitstream filter, error %s.\n", i, debugstr_averr(ret) );
+            return ret == AVERROR(ENOMEM) ? STATUS_NO_MEMORY : STATUS_UNSUCCESSFUL;
+        }
     }
 
     return STATUS_SUCCESS;
@@ -214,6 +257,7 @@ NTSTATUS demuxer_create( void *arg )
     const AVInputFormat *format;
     struct demuxer *demuxer;
     BOOL needs_find_stream_info = FALSE;
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
     int i, ret;
 
     TRACE( "context %p, url %s, mime %s\n", params->context, debugstr_a(params->url), debugstr_a(params->mime_type) );
@@ -239,6 +283,8 @@ NTSTATUS demuxer_create( void *arg )
         AVStream *stream = demuxer->ctx->streams[i];
         AVCodecParameters *par = stream->codecpar;
 
+        if (par->codec_id == AV_CODEC_ID_HEVC && (par->profile < 0 || !par->extradata_size))
+            needs_find_stream_info = TRUE;
         if (par->codec_id != AV_CODEC_ID_H264) continue;
         if ((stream->sample_aspect_ratio.den && stream->sample_aspect_ratio.num) ||
             (par->sample_aspect_ratio.den && par->sample_aspect_ratio.num)) continue;
@@ -254,7 +300,7 @@ NTSTATUS demuxer_create( void *arg )
 
     if (params->duration == AV_NOPTS_VALUE) params->duration = get_context_duration( demuxer->ctx );
     if (!(demuxer->streams = calloc( demuxer->ctx->nb_streams, sizeof(*demuxer->streams) ))) goto failed;
-    if (demuxer_create_streams( demuxer )) goto failed;
+    if ((status = demuxer_create_streams( demuxer ))) goto failed;
 
     params->demuxer.handle = (UINT_PTR)demuxer;
     params->stream_count = demuxer->ctx->nb_streams;
@@ -293,7 +339,7 @@ failed:
         avformat_free_context( demuxer->ctx );
     }
     free( demuxer );
-    return STATUS_UNSUCCESSFUL;
+    return status;
 }
 
 NTSTATUS demuxer_destroy( void *arg )
@@ -328,18 +374,48 @@ static NTSTATUS demuxer_filter_packet( struct demuxer *demuxer, AVPacket **packe
         if (!(stream = demuxer->last_stream)) ret = 0;
         else
         {
-            if (!(ret = av_bsf_receive_packet( stream->filter, *packet ))) return STATUS_SUCCESS;
+            if (!(ret = av_bsf_receive_packet( stream->filter, *packet )))
+            {
+                if (stream->filter->par_out->codec_id != AV_CODEC_ID_HEVC || is_annexb( (*packet)->data, (*packet)->size ))
+                    return STATUS_SUCCESS;
+                ERR( "HEVC bitstream filter returned a packet without an Annex B start code.\n" );
+                av_packet_free( packet );
+                demuxer->last_stream = NULL;
+                return STATUS_UNSUCCESSFUL;
+            }
             if (ret == AVERROR_EOF) stream->eos = TRUE;
-            if (!ret || ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) ret = 0;
-            else WARN( "Failed to read packet from filter, error %s.\n", debugstr_averr( ret ) );
+            if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) ret = 0;
+            else
+            {
+                WARN( "Failed to read packet from filter, error %s.\n", debugstr_averr( ret ) );
+                if (stream->filter->par_out->codec_id == AV_CODEC_ID_HEVC)
+                {
+                    av_packet_free( packet );
+                    demuxer->last_stream = NULL;
+                    return ret == AVERROR(ENOMEM) ? STATUS_NO_MEMORY : STATUS_UNSUCCESSFUL;
+                }
+            }
             stream = demuxer->last_stream = NULL;
         }
 
         if (!ret && !(ret = av_read_frame( demuxer->ctx, *packet )))
         {
             stream = demuxer->streams + (*packet)->stream_index;
+            if (!stream->filter)
+            {
+                av_packet_free( packet );
+                continue;
+            }
             ret = av_bsf_send_packet( stream->filter, (*packet) );
-            if (ret < 0) WARN( "Failed to send packet to filter, error %s.\n", debugstr_averr( ret ) );
+            if (ret < 0)
+            {
+                WARN( "Failed to send packet to filter, error %s.\n", debugstr_averr( ret ) );
+                if (stream->filter->par_out->codec_id == AV_CODEC_ID_HEVC)
+                {
+                    av_packet_free( packet );
+                    return ret == AVERROR(ENOMEM) ? STATUS_NO_MEMORY : STATUS_UNSUCCESSFUL;
+                }
+            }
             else demuxer->last_stream = stream;
         }
         av_packet_free( packet );
@@ -348,10 +424,15 @@ static NTSTATUS demuxer_filter_packet( struct demuxer *demuxer, AVPacket **packe
         {
             for (i = 0; ret == AVERROR_EOF && i < demuxer->ctx->nb_streams; i++)
             {
-                if (demuxer->streams[i].eos) continue;
                 stream = demuxer->streams + i;
+                if (!stream->filter || stream->eos) continue;
                 ret = av_bsf_send_packet( stream->filter, NULL );
-                if (ret < 0) WARN( "Failed to send packet to filter, error %s.\n", debugstr_averr( ret ) );
+                if (ret < 0)
+                {
+                    WARN( "Failed to send packet to filter, error %s.\n", debugstr_averr( ret ) );
+                    if (ret != AVERROR_EOF && stream->filter->par_out->codec_id == AV_CODEC_ID_HEVC)
+                        return ret == AVERROR(ENOMEM) ? STATUS_NO_MEMORY : STATUS_UNSUCCESSFUL;
+                }
                 else demuxer->last_stream = stream;
             }
 
@@ -414,7 +495,7 @@ NTSTATUS demuxer_seek( void *arg )
 
     for (i = 0; i < demuxer->ctx->nb_streams; i++)
     {
-        av_bsf_flush( demuxer->streams[i].filter );
+        if (demuxer->streams[i].filter) av_bsf_flush( demuxer->streams[i].filter );
         demuxer->streams[i].eos = FALSE;
     }
     av_packet_free( &demuxer->last_packet );
@@ -456,18 +537,41 @@ NTSTATUS demuxer_stream_name( void *arg )
     return STATUS_SUCCESS;
 }
 
+static enum winedmo_video_profile get_video_profile( const AVCodecParameters *par )
+{
+    const AVPixFmtDescriptor *desc;
+
+    if (par->codec_id != AV_CODEC_ID_HEVC) return WINEDMO_VIDEO_PROFILE_UNKNOWN;
+
+    switch (par->profile)
+    {
+    case AV_PROFILE_HEVC_MAIN:
+        return WINEDMO_VIDEO_PROFILE_HEVC_MAIN;
+    case AV_PROFILE_HEVC_MAIN_10:
+        return WINEDMO_VIDEO_PROFILE_HEVC_MAIN_10;
+    case AV_PROFILE_HEVC_MAIN_STILL_PICTURE:
+        desc = av_pix_fmt_desc_get( par->format );
+        if (par->bits_per_raw_sample > 8 || (desc && desc->comp[0].depth > 8)) break;
+        return WINEDMO_VIDEO_PROFILE_HEVC_MAIN_STILL_PICTURE;
+    }
+
+    return WINEDMO_VIDEO_PROFILE_UNKNOWN;
+}
+
 NTSTATUS demuxer_stream_type( void *arg )
 {
     struct demuxer_stream_type_params *params = arg;
     struct demuxer *demuxer = get_demuxer( params->demuxer );
     AVStream *stream = demuxer->ctx->streams[params->stream];
-    AVCodecParameters *par = demuxer->streams[params->stream].filter->par_out;
+    AVBSFContext *filter = demuxer->streams[params->stream].filter;
     AVRational sar = stream->sample_aspect_ratio;
 
     TRACE( "demuxer %p, stream %u, stream %p, index %u\n", demuxer, params->stream, stream, stream->index );
 
+    if (!filter) return STATUS_NOT_SUPPORTED;
+    params->video_profile = get_video_profile( filter->par_out );
     if (!sar.den || !sar.num) sar = stream->codecpar->sample_aspect_ratio;
-    return media_type_from_codec_params( par, &sar, &stream->avg_frame_rate, 0, &params->media_type );
+    return media_type_from_codec_params( filter->par_out, &sar, &stream->avg_frame_rate, 0, &params->media_type );
 }
 
 #endif /* HAVE_FFMPEG */

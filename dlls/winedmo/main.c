@@ -327,9 +327,13 @@ static HRESULT get_media_type( UINT code, void *params, struct media_type *media
 }
 
 NTSTATUS CDECL winedmo_demuxer_stream_type( struct winedmo_demuxer demuxer, UINT stream,
-                                            GUID *major, union winedmo_format **format )
+                                            GUID *major, union winedmo_format **format, enum winedmo_video_profile *profile )
 {
     struct demuxer_stream_type_params params = {.demuxer = demuxer, .stream = stream};
-    TRACE( "demuxer %#I64x, stream %u, major %p, format %p\n", demuxer.handle, stream, major, format );
-    return get_media_type( unix_demuxer_stream_type, &params, &params.media_type, major, format );
+    NTSTATUS status;
+
+    TRACE( "demuxer %#I64x, stream %u, major %p, format %p, profile %p\n", demuxer.handle, stream, major, format, profile );
+    if ((status = get_media_type( unix_demuxer_stream_type, &params, &params.media_type, major, format ))) return status;
+    *profile = params.video_profile;
+    return STATUS_SUCCESS;
 }

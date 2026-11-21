@@ -149,8 +149,13 @@ struct demuxer_stream_type_params
 {
     struct winedmo_demuxer demuxer;
     UINT32 stream;
+    UINT32 video_profile;
     struct media_type media_type;
 };
+
+C_ASSERT( offsetof( struct demuxer_stream_type_params, video_profile ) == 12 );
+C_ASSERT( offsetof( struct demuxer_stream_type_params, media_type ) == 16 );
+C_ASSERT( sizeof(struct demuxer_stream_type_params) == 48 );
 
 
 enum unix_funcs

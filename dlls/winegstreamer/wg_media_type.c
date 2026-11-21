@@ -36,6 +36,7 @@
 #include "winbase.h"
 
 #include "initguid.h"
+#include "codecapi.h"
 #include "d3d9types.h"
 #include "mfapi.h"
 #include "wmcodecdsp.h"
@@ -377,6 +378,32 @@ static void init_caps_from_video_h264(GstCaps *caps, const MFVIDEOFORMAT *format
     }
 }
 
+static void init_caps_from_video_hevc(GstCaps *caps, const MFVIDEOFORMAT *format, UINT format_size)
+{
+    const struct hevc_video_format *hevc = (const struct hevc_video_format *)format;
+    const char *profile = NULL;
+
+    gst_structure_remove_field(gst_caps_get_structure(caps, 0), "format");
+    gst_structure_set_name(gst_caps_get_structure(caps, 0), "video/x-h265");
+    gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "byte-stream", NULL);
+
+    /* HEVC has one picture per sample. HEVC_ES can split or combine pictures. */
+    if (IsEqualGUID(&format->guidFormat, &MFVideoFormat_HEVC))
+        gst_caps_set_simple(caps, "alignment", G_TYPE_STRING, "au", NULL);
+
+    if (format_size == sizeof(*hevc))
+    {
+        switch (hevc->profile)
+        {
+        case eAVEncH265VProfile_Main_420_8:      profile = "main"; break;
+        case eAVEncH265VProfile_Main_420_10:     profile = "main-10"; break;
+        case eAVEncH265VProfile_MainStill_420_8: profile = "main-still-picture"; break;
+        }
+    }
+    if (profile)
+        gst_caps_set_simple(caps, "profile", G_TYPE_STRING, profile, NULL);
+}
+
 static void init_caps_from_video_wmv(GstCaps *caps, const MFVIDEOFORMAT *format, UINT format_size,
         int wmv_version, const char *wmv_format)
 {
@@ -438,6 +465,8 @@ static void init_caps_from_video_subtype(GstCaps *caps, const GUID *subtype, con
         return init_caps_from_video_cinepak(caps, format, format_size);
     if (IsEqualGUID(subtype, &MFVideoFormat_H264))
         return init_caps_from_video_h264(caps, format, format_size);
+    if (IsEqualGUID(subtype, &MFVideoFormat_HEVC) || IsEqualGUID(subtype, &MFVideoFormat_HEVC_ES))
+        return init_caps_from_video_hevc(caps, format, format_size);
     if (IsEqualGUID(subtype, &MFVideoFormat_WMV1))
         return init_caps_from_video_wmv(caps, format, format_size, 1, "WMV1");
     if (IsEqualGUID(subtype, &MFVideoFormat_WMV2))
@@ -481,6 +510,7 @@ static GstVideoFormat subtype_to_gst_video_format(const GUID *subtype)
         case MAKEFOURCC('I','Y','U','V'):
         case MAKEFOURCC('I','4','2','0'): return GST_VIDEO_FORMAT_I420;
         case MAKEFOURCC('N','V','1','2'): return GST_VIDEO_FORMAT_NV12;
+        case MAKEFOURCC('P','0','1','0'): return GST_VIDEO_FORMAT_P010_10LE;
         case MAKEFOURCC('U','Y','V','Y'): return GST_VIDEO_FORMAT_UYVY;
         case MAKEFOURCC('Y','U','Y','2'): return GST_VIDEO_FORMAT_YUY2;
         case MAKEFOURCC('Y','V','1','2'): return GST_VIDEO_FORMAT_YV12;

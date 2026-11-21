@@ -93,9 +93,11 @@ struct media_stream
     DWORD id;
     unsigned int index;
     enum media_stream_state state;
+    HRESULT error_status;
     unsigned int flags;
     unsigned int requests;
     unsigned int responses;
+    unsigned int error_callbacks;
     LONGLONG last_sample_ts;
     struct source_reader *reader;
 };
@@ -404,35 +406,39 @@ static HRESULT WINAPI source_reader_callback_GetParameters(IMFAsyncCallback *ifa
     return E_NOTIMPL;
 }
 
-static void source_reader_response_ready(struct source_reader *reader, struct stream_response *response)
+static HRESULT source_reader_response_ready(struct source_reader *reader, struct stream_response *response)
 {
     struct source_reader_async_command *command;
     struct media_stream *stream = &reader->streams[response->stream_index];
     HRESULT hr;
 
     if (!stream->requests)
-        return;
+        return S_OK;
 
     if (reader->async_callback)
     {
-        if (SUCCEEDED(source_reader_create_async_op(SOURCE_READER_ASYNC_SAMPLE_READY, &command)))
-        {
-            command->u.sample.stream_index = stream->index;
-            if (FAILED(hr = MFPutWorkItem(reader->queue, &reader->async_commands_callback, &command->IUnknown_iface)))
-                WARN("Failed to submit async result, hr %#lx.\n", hr);
-            IUnknown_Release(&command->IUnknown_iface);
-        }
+        if (FAILED(hr = source_reader_create_async_op(SOURCE_READER_ASYNC_SAMPLE_READY, &command)))
+            return hr;
+
+        command->u.sample.stream_index = stream->index;
+        if (FAILED(hr = MFPutWorkItem(reader->queue, &reader->async_commands_callback, &command->IUnknown_iface)))
+            WARN("Failed to submit async result, hr %#lx.\n", hr);
+        IUnknown_Release(&command->IUnknown_iface);
+        if (FAILED(hr))
+            return hr;
     }
     else
         WakeAllConditionVariable(&reader->sample_event);
 
     stream->requests--;
+    return S_OK;
 }
 
 static HRESULT source_reader_queue_response(struct source_reader *reader, struct media_stream *stream, HRESULT status,
         DWORD stream_flags, LONGLONG timestamp, IMFSample *sample)
 {
     struct stream_response *response;
+    HRESULT hr;
 
     if (!(response = calloc(1, sizeof(*response))))
         return E_OUTOFMEMORY;
@@ -448,7 +454,20 @@ static HRESULT source_reader_queue_response(struct source_reader *reader, struct
     list_add_tail(&reader->responses, &response->entry);
     stream->responses++;
 
-    source_reader_response_ready(reader, response);
+    if (FAILED(hr = source_reader_response_ready(reader, response)))
+    {
+        if (FAILED(status))
+        {
+            list_remove(&response->entry);
+            --stream->responses;
+            if (response->sample)
+                IMFSample_Release(response->sample);
+            free(response);
+            return hr;
+        }
+        if (stream->requests)
+            --stream->requests;
+    }
 
     stream->last_sample_ts = timestamp;
 
@@ -539,9 +558,23 @@ static HRESULT source_reader_new_stream_handler(struct source_reader *reader, IM
     return hr;
 }
 
-static HRESULT source_reader_source_state_handler(struct source_reader *reader, MediaEventType event_type)
+static HRESULT source_reader_source_state_handler(struct source_reader *reader, MediaEventType event_type,
+        IMFMediaEvent *event)
 {
+    HRESULT status;
+    unsigned int i;
+
     EnterCriticalSection(&reader->cs);
+
+    if ((event_type == MESourceStarted || event_type == MESourceSeeked)
+            && SUCCEEDED(IMFMediaEvent_GetStatus(event, &status)) && SUCCEEDED(status))
+    {
+        for (i = 0; i < reader->stream_count; ++i)
+        {
+            reader->streams[i].error_status = S_OK;
+            reader->streams[i].state = STREAM_STATE_READY;
+        }
+    }
 
     switch (event_type)
     {
@@ -565,6 +598,63 @@ static HRESULT source_reader_source_state_handler(struct source_reader *reader, 
     WakeAllConditionVariable(&reader->state_event);
     if (event_type == MESourceStopped)
         WakeAllConditionVariable(&reader->stop_event);
+
+    return S_OK;
+}
+
+static HRESULT source_reader_source_error_handler(struct source_reader *reader, IMFMediaEvent *event)
+{
+    HRESULT error_status, hr;
+    unsigned int i;
+
+    if (FAILED(hr = IMFMediaEvent_GetStatus(event, &error_status)))
+        error_status = hr;
+    else if (SUCCEEDED(error_status))
+        error_status = E_FAIL;
+
+    EnterCriticalSection(&reader->cs);
+    for (i = 0; i < reader->stream_count; ++i)
+    {
+        struct media_stream *stream = &reader->streams[i];
+
+        stream->state = STREAM_STATE_EOS;
+        stream->error_status = error_status;
+        stream->flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
+
+        while (stream->requests)
+        {
+            if (SUCCEEDED(source_reader_queue_response(reader, stream, error_status,
+                    MF_SOURCE_READERF_ERROR, 0, NULL)))
+                continue;
+
+            stream->error_callbacks += stream->requests;
+            stream->requests = 0;
+            break;
+        }
+    }
+    reader->flags &= ~SOURCE_READER_SEEKING;
+    LeaveCriticalSection(&reader->cs);
+
+    WakeAllConditionVariable(&reader->sample_event);
+    WakeAllConditionVariable(&reader->state_event);
+
+    if (reader->async_callback)
+    {
+        for (i = 0; i < reader->stream_count; ++i)
+        {
+            struct media_stream *stream = &reader->streams[i];
+            unsigned int count;
+
+            EnterCriticalSection(&reader->cs);
+            count = stream->error_callbacks;
+            stream->error_callbacks = 0;
+            LeaveCriticalSection(&reader->cs);
+
+            while (count--)
+                IMFSourceReaderCallback_OnReadSample(reader->async_callback, error_status, stream->index,
+                        MF_SOURCE_READERF_ERROR, 0, NULL);
+        }
+    }
 
     return S_OK;
 }
@@ -597,7 +687,7 @@ static HRESULT WINAPI source_reader_source_events_callback_Invoke(IMFAsyncCallba
         case MESourcePaused:
         case MESourceStopped:
         case MESourceSeeked:
-            hr = source_reader_source_state_handler(reader, event_type);
+            hr = source_reader_source_state_handler(reader, event_type, event);
             break;
         case MEBufferingStarted:
         case MEBufferingStopped:
@@ -608,6 +698,11 @@ static HRESULT WINAPI source_reader_source_events_callback_Invoke(IMFAsyncCallba
         case MESourceMetadataChanged:
         case MEContentProtectionMetadata:
         case MEDeviceThermalStateChanged:
+            if (reader->async_callback)
+                IMFSourceReaderCallback_OnEvent(reader->async_callback, MF_SOURCE_READER_MEDIASOURCE, event);
+            break;
+        case MEError:
+            hr = source_reader_source_error_handler(reader, event);
             if (reader->async_callback)
                 IMFSourceReaderCallback_OnEvent(reader->async_callback, MF_SOURCE_READER_MEDIASOURCE, event);
             break;
@@ -1029,9 +1124,12 @@ static HRESULT source_reader_media_sample_handler(struct source_reader *reader, 
     {
         if (id == reader->streams[i].id)
         {
-            /* FIXME: propagate processing errors? */
-            reader->streams[i].flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
-            hr = source_reader_process_sample(reader, &reader->streams[i], sample);
+            struct media_stream *media_stream = &reader->streams[i];
+            media_stream->flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
+            if (FAILED(media_stream->error_status))
+                TRACE("Ignoring sample received after stream error.\n");
+            else
+                hr = source_reader_process_sample(reader, media_stream, sample);
             break;
         }
     }
@@ -1053,11 +1151,20 @@ static HRESULT source_reader_media_stream_state_handler(struct source_reader *re
     LONGLONG timestamp;
     PROPVARIANT value;
     struct list *ptr;
+    struct media_stream *error_stream = NULL;
+    unsigned int error_callback_count = 0;
     unsigned int i;
-    HRESULT hr;
+    HRESULT hr, error_status = S_OK;
     DWORD id;
 
     IMFMediaEvent_GetType(event, &event_type);
+    if (event_type == MEError)
+    {
+        if (FAILED(hr = IMFMediaEvent_GetStatus(event, &error_status)))
+            error_status = hr;
+        else if (SUCCEEDED(error_status))
+            error_status = E_FAIL;
+    }
 
     if (FAILED(hr = media_stream_get_id(stream, &id)))
     {
@@ -1089,6 +1196,25 @@ static HRESULT source_reader_media_stream_state_handler(struct source_reader *re
                     while (stream->requests)
                         source_reader_queue_response(reader, stream, S_OK, MF_SOURCE_READERF_ENDOFSTREAM, 0, NULL);
 
+                    break;
+                case MEError:
+                    stream->state = STREAM_STATE_EOS;
+                    stream->error_status = error_status;
+                    stream->flags &= ~STREAM_FLAG_SAMPLE_REQUESTED;
+
+                    while (stream->requests)
+                    {
+                        if (SUCCEEDED(source_reader_queue_response(reader, stream, error_status,
+                                MF_SOURCE_READERF_ERROR, 0, NULL)))
+                            continue;
+
+                        stream->error_callbacks += stream->requests;
+                        stream->requests = 0;
+                        break;
+                    }
+                    error_callback_count = stream->error_callbacks;
+                    stream->error_callbacks = 0;
+                    error_stream = stream;
                     break;
                 case MEStreamSeeked:
                 case MEStreamStarted:
@@ -1122,6 +1248,15 @@ static HRESULT source_reader_media_stream_state_handler(struct source_reader *re
     }
 
     LeaveCriticalSection(&reader->cs);
+
+    if (event_type == MEError)
+        WakeAllConditionVariable(&reader->sample_event);
+    if (error_callback_count && reader->async_callback)
+    {
+        while (error_callback_count--)
+            IMFSourceReaderCallback_OnReadSample(reader->async_callback, error_status, error_stream->index,
+                    MF_SOURCE_READERF_ERROR, 0, NULL);
+    }
 
     if (event_type == MEStreamStopped)
         WakeAllConditionVariable(&reader->stop_event);
@@ -1158,6 +1293,7 @@ static HRESULT WINAPI source_reader_stream_events_callback_Invoke(IMFAsyncCallba
         case MEStreamStopped:
         case MEStreamTick:
         case MEEndOfStream:
+        case MEError:
             hr = source_reader_media_stream_state_handler(reader, stream, event);
             break;
         default:
@@ -1341,7 +1477,12 @@ static BOOL source_reader_get_read_result(struct source_reader *reader, struct m
         *timestamp = 0;
         *sample = NULL;
 
-        if (stream->state == STREAM_STATE_EOS)
+        if (FAILED(stream->error_status))
+        {
+            *status = stream->error_status;
+            *stream_flags = MF_SOURCE_READERF_ERROR;
+        }
+        else if (stream->state == STREAM_STATE_EOS)
         {
             *stream_flags = MF_SOURCE_READERF_ENDOFSTREAM;
         }
@@ -1532,8 +1673,16 @@ static HRESULT WINAPI source_reader_async_commands_callback_Invoke(IMFAsyncCallb
                             &stream_index, &stream_flags, &timestamp, &sample)))
                     {
                         stream->requests++;
-                        source_reader_request_sample(reader, stream);
-                        /* FIXME: set error stream/reader state on request failure */
+                        if (FAILED(hr = source_reader_request_sample(reader, stream)))
+                        {
+                            WARN("Failed to request a sample, hr %#lx.\n", hr);
+                            --stream->requests;
+                            report_sample = TRUE;
+                            status = hr;
+                            stream_index = stream->index;
+                            stream_flags = MF_SOURCE_READERF_ERROR;
+                            timestamp = 0;
+                        }
                     }
                 }
                 else
