@@ -1,6 +1,6 @@
 name: build
 
-# 构建本仓库的 master 和 DWProton 升级分支；只有 master 可以发布 Release。
+# 构建本仓库的 master 和 DWProton 升级分支；两者默认都会发布 Release。
 #
 # 由 termux-glibc-mangohud 的 termux-glibc-wine.yml 精简而来：
 #   - 删除所有外部源码克隆（WinNative-Emu/proton-wine 及全部 wine_branch 选项）
@@ -514,10 +514,10 @@ jobs:
 
       - name: 清理同名 Release 的旧资产
         if: >
-          github.ref == 'refs/heads/master'
+          (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/upgrade/dwproton-11.0-17')
           && (github.event_name == 'push'
               || (github.event_name == 'workflow_dispatch'
-                  && github.event.inputs.build_type == 'wine-wow64'))
+                  && (github.event.inputs.build_type || 'wine-wow64') == 'wine-wow64'))
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -549,13 +549,13 @@ jobs:
 
       - name: 发布 Wine 到 GitHub Release
         uses: softprops/action-gh-release@v2
-        # master 的 push 和手动构建才发布；升级分支只上传 Actions 产物。
-        # dispatch 时仍要求 build_type 为 wine-wow64。
+        # master 与升级分支的 push / 手动构建均发布。
+        # dispatch 时仍要求 build_type 为 wine-wow64（默认即 wine-wow64）。
         if: >
-          github.ref == 'refs/heads/master'
+          (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/upgrade/dwproton-11.0-17')
           && (github.event_name == 'push'
               || (github.event_name == 'workflow_dispatch'
-                  && github.event.inputs.build_type == 'wine-wow64'))
+                  && (github.event.inputs.build_type || 'wine-wow64') == 'wine-wow64'))
         with:
           tag_name: wine-${{ steps.wine_meta.outputs.safe_wine_branch || 'master' }}-${{ steps.wine_meta.outputs.safe_wine_version || 'latest' }}-wow64
           name: Wine ${{ steps.wine_meta.outputs.safe_wine_branch || 'master' }} ${{ steps.wine_meta.outputs.safe_wine_version || 'latest' }} (WOW64 with Vulkan & GStreamer for Termux)
