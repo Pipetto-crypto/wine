@@ -1248,7 +1248,7 @@ static void x11drv_surface_flush( struct opengl_drawable *base, UINT flags )
  */
 static BOOL x11drv_context_create( int format, void *share, const int *attribList, void **context )
 {
-    int glx_attribs[16] = {0}, *pContextAttribList = glx_attribs;
+    int glx_attribs[16] = {0}, count = 0, i, attrib;
     int err = 0;
 
     TRACE("(%d %p %p)\n", format, share, attribList);
@@ -1256,42 +1256,43 @@ static BOOL x11drv_context_create( int format, void *share, const int *attribLis
     if (attribList)
     {
         /* attribList consists of pairs {token, value] terminated with 0 */
-        while(attribList[0] != 0)
+        for (; attribList[0]; attribList += 2)
         {
             TRACE("%#x %#x\n", attribList[0], attribList[1]);
             switch(attribList[0])
             {
             case WGL_CONTEXT_MAJOR_VERSION_ARB:
-                pContextAttribList[0] = GLX_CONTEXT_MAJOR_VERSION_ARB;
-                pContextAttribList[1] = attribList[1];
-                pContextAttribList += 2;
+                attrib = GLX_CONTEXT_MAJOR_VERSION_ARB;
                 break;
             case WGL_CONTEXT_MINOR_VERSION_ARB:
-                pContextAttribList[0] = GLX_CONTEXT_MINOR_VERSION_ARB;
-                pContextAttribList[1] = attribList[1];
-                pContextAttribList += 2;
+                attrib = GLX_CONTEXT_MINOR_VERSION_ARB;
                 break;
             case WGL_CONTEXT_LAYER_PLANE_ARB:
-                break;
+                continue;
             case WGL_CONTEXT_FLAGS_ARB:
-                pContextAttribList[0] = GLX_CONTEXT_FLAGS_ARB;
-                pContextAttribList[1] = attribList[1];
-                pContextAttribList += 2;
+                attrib = GLX_CONTEXT_FLAGS_ARB;
                 break;
             case WGL_CONTEXT_OPENGL_NO_ERROR_ARB:
-                pContextAttribList[0] = GLX_CONTEXT_OPENGL_NO_ERROR_ARB;
-                pContextAttribList[1] = attribList[1];
-                pContextAttribList += 2;
+                attrib = GLX_CONTEXT_OPENGL_NO_ERROR_ARB;
                 break;
             case WGL_CONTEXT_PROFILE_MASK_ARB:
-                pContextAttribList[0] = GLX_CONTEXT_PROFILE_MASK_ARB;
-                pContextAttribList[1] = attribList[1];
-                pContextAttribList += 2;
+                attrib = GLX_CONTEXT_PROFILE_MASK_ARB;
                 break;
             default:
                 ERR("Unhandled attribList pair: %#x %#x\n", attribList[0], attribList[1]);
+                continue;
             }
-            attribList += 2;
+
+            /* Repeated attributes use the last value, without growing the list. */
+            for (i = 0; i < count; i += 2) if (glx_attribs[i] == attrib) break;
+            if (i == count)
+            {
+                if (count + 2 >= ARRAY_SIZE(glx_attribs)) return FALSE;
+                count += 2;
+            }
+            glx_attribs[i] = attrib;
+            glx_attribs[i + 1] = attribList[1];
+            glx_attribs[count] = 0;
         }
     }
 

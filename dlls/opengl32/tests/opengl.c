@@ -2320,6 +2320,27 @@ static void test_opengl3(HDC hdc)
         wglDeleteContext(gl3Ctx);
     }
 
+    /* Repeated attributes are allowed, and the last value takes precedence. */
+    {
+        int attribs[65], i, j;
+        HGLRC ctx;
+
+        for (j = 0; j < 2; ++j)
+        {
+            for (i = 0; i < 32; ++i)
+            {
+                attribs[2 * i] = WGL_CONTEXT_MAJOR_VERSION_ARB;
+                attribs[2 * i + 1] = j ? 99 : 1;
+            }
+            attribs[63] = 1;
+            attribs[64] = 0;
+            ctx = pwglCreateContextAttribsARB(hdc, 0, attribs);
+            ok(!!ctx, "Context creation with repeated attributes failed, case %d, error %#lx.\n",
+               j, GetLastError());
+            if (ctx) wglDeleteContext(ctx);
+        }
+    }
+
     /* Try to pass an invalid HDC */
     {
         HGLRC gl3Ctx;
