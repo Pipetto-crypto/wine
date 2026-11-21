@@ -1,7 +1,6 @@
 #include "config.h"
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdint.h>
 #ifdef HAVE_SYS_EVENTFD_H
 # include <sys/eventfd.h>
 #endif
@@ -11,7 +10,6 @@
 #endif
 #include <errno.h>
 #include <unistd.h>
-#include <stdint.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS

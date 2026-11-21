@@ -48,9 +48,6 @@
 #include "unix_private.h"
 #include "esync.h"
 #include "fsync.h"
-#ifdef __ANDROID__
-#include "../../../android/shm_utils/shm_utils.h"
-#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(esync);
 
@@ -99,7 +96,6 @@ struct event
 };
 C_ASSERT(sizeof(struct event) == 8);
 
-static char shm_name[29];
 static int shm_fd;
 static void **shm_addrs;
 static int shm_addrs_size;  /* length of the allocated shm_addrs array */
