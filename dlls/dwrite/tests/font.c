@@ -4394,6 +4394,146 @@ static void test_GetInformationalStrings(void)
     ok(ref == 0, "factory not released, %lu\n", ref);
 }
 
+static void test_empty_name_record(void)
+{
+    static const WCHAR copyright[] = L"Copyright (c) 2010 Dmitry Timoshkov";
+    IDWriteInMemoryFontFileLoader *loader;
+    IDWriteLocalizedStrings *strings;
+    struct dwrite_fonttable blob, name;
+    IDWriteFontFace3 *face3;
+    IDWriteFactory5 *factory;
+    IDWriteFontFace *face;
+    IDWriteFontFile *file;
+    UINT32 i, j, count, offset, index, length, record = 0;
+    WCHAR buffer[64];
+    BOOL exists;
+    HRSRC resource;
+    HRESULT hr;
+
+    factory = create_factory_iid(&IID_IDWriteFactory5);
+    if (!factory)
+    {
+        win_skip("In-memory font loader is not supported.\n");
+        return;
+    }
+
+    resource = FindResourceA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(1), (LPCSTR)RT_RCDATA);
+    ok(resource != NULL, "Failed to find font resource.\n");
+    if (!resource) goto done;
+    blob.size = SizeofResource(GetModuleHandleA(NULL), resource);
+    blob.data = malloc(blob.size);
+    ok(blob.data != NULL, "Failed to allocate font copy.\n");
+    if (!blob.data) goto done;
+    memcpy(blob.data, LockResource(LoadResource(GetModuleHandleA(NULL), resource)), blob.size);
+
+    /* Locate the name table in the sfnt directory, then the Windows UTF16BE copyright record. */
+    name.data = NULL;
+    count = table_read_be_word(&blob, NULL, 4);
+    for (i = 0; i < count; ++i)
+    {
+        offset = 12 + i * 16;
+        if (!table_read_ensure(&blob, offset, 16)) break;
+        if (memcmp(blob.data + offset, "name", 4)) continue;
+        name.size = table_read_be_dword(&blob, NULL, offset + 12);
+        name.data = (BYTE *)table_read_ensure(&blob,
+                table_read_be_dword(&blob, NULL, offset + 8), name.size);
+        break;
+    }
+    ok(name.data != NULL, "Failed to find name table.\n");
+    if (!name.data) goto free_blob;
+    count = table_read_be_word(&name, NULL, 2);
+    for (i = 0; i < count; ++i)
+    {
+        offset = 6 + i * 12;
+        if (!table_read_ensure(&name, offset, 12)) break;
+        if (table_read_be_word(&name, NULL, offset) != 3
+                || table_read_be_word(&name, NULL, offset + 2) != 1
+                || table_read_be_word(&name, NULL, offset + 4) != 0x0409
+                || table_read_be_word(&name, NULL, offset + 6)) continue;
+        record = offset;
+        break;
+    }
+    ok(record != 0, "Failed to find Windows en-US copyright record.\n");
+    if (!record) goto free_blob;
+    length = table_read_be_word(&name, NULL, record + 8);
+    ok(length == (ARRAY_SIZE(copyright) - 1) * sizeof(WCHAR), "Unexpected record length %u.\n", length);
+
+    hr = IDWriteFactory5_CreateInMemoryFontFileLoader(factory, &loader);
+    ok(hr == S_OK, "Failed to create loader, hr %#lx.\n", hr);
+    if (FAILED(hr)) goto free_blob;
+    hr = IDWriteFactory5_RegisterFontFileLoader(factory, (IDWriteFontFileLoader *)loader);
+    ok(hr == S_OK, "Failed to register loader, hr %#lx.\n", hr);
+    if (FAILED(hr)) goto release_loader;
+
+    for (j = 0; j < 2; ++j)
+    {
+        winetest_push_context("empty %u", j);
+        /* Only change length, keeping the original string data and Macintosh record intact. */
+        if (j) memset(name.data + record + 8, 0, sizeof(WORD));
+        /* A NULL owner makes the loader copy the data; each case gets a separate file key. */
+        hr = IDWriteInMemoryFontFileLoader_CreateInMemoryFontFileReference(loader, (IDWriteFactory *)factory,
+                blob.data, blob.size, NULL, &file);
+        ok(hr == S_OK, "Failed to create font file, hr %#lx.\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = IDWriteFactory5_CreateFontFace(factory, DWRITE_FONT_FACE_TYPE_TRUETYPE, 1, &file,
+                    0, DWRITE_FONT_SIMULATIONS_NONE, &face);
+            ok(hr == S_OK, "Failed to create font face, hr %#lx.\n", hr);
+            if (SUCCEEDED(hr))
+            {
+                hr = IDWriteFontFace_QueryInterface(face, &IID_IDWriteFontFace3, (void **)&face3);
+                ok(hr == S_OK, "Failed to get FontFace3, hr %#lx.\n", hr);
+                if (SUCCEEDED(hr))
+                {
+                    strings = NULL;
+                    exists = FALSE;
+                    hr = IDWriteFontFace3_GetInformationalStrings(face3, DWRITE_INFORMATIONAL_STRING_COPYRIGHT_NOTICE,
+                            &strings, &exists);
+                    ok(hr == S_OK, "Failed to get copyright strings, hr %#lx.\n", hr);
+                    ok(exists, "Expected copyright strings to exist.\n");
+                    ok(strings != NULL, "Expected copyright strings.\n");
+                    if (strings)
+                    {
+                        count = IDWriteLocalizedStrings_GetCount(strings);
+                        ok(count == 1, "Unexpected string count %u.\n", count);
+                        exists = FALSE;
+                        index = ~0u;
+                        hr = IDWriteLocalizedStrings_FindLocaleName(strings, L"en-us", &index, &exists);
+                        ok(hr == S_OK, "Failed to find locale, hr %#lx.\n", hr);
+                        ok(exists, "Expected en-US entry.\n");
+                        if (exists)
+                        {
+                            length = ~0u;
+                            hr = IDWriteLocalizedStrings_GetStringLength(strings, index, &length);
+                            ok(hr == S_OK, "Failed to get string length, hr %#lx.\n", hr);
+                            ok(length == (j ? 0 : ARRAY_SIZE(copyright) - 1), "Unexpected length %u.\n", length);
+                            buffer[0] = 0xdead;
+                            hr = IDWriteLocalizedStrings_GetString(strings, index, buffer, j ? 1 : ARRAY_SIZE(buffer));
+                            ok(hr == S_OK, "Failed to get string, hr %#lx.\n", hr);
+                            if (SUCCEEDED(hr))
+                                ok(!lstrcmpW(buffer, j ? L"" : copyright), "Unexpected string %s.\n", wine_dbgstr_w(buffer));
+                        }
+                        IDWriteLocalizedStrings_Release(strings);
+                    }
+                    IDWriteFontFace3_Release(face3);
+                }
+                IDWriteFontFace_Release(face);
+            }
+            IDWriteFontFile_Release(file);
+        }
+        winetest_pop_context();
+    }
+
+    hr = IDWriteFactory5_UnregisterFontFileLoader(factory, (IDWriteFontFileLoader *)loader);
+    ok(hr == S_OK, "Failed to unregister loader, hr %#lx.\n", hr);
+release_loader:
+    IDWriteInMemoryFontFileLoader_Release(loader);
+free_blob:
+    free(blob.data);
+done:
+    IDWriteFactory5_Release(factory);
+}
+
 static void test_GetGdiInterop(void)
 {
     IDWriteGdiInterop *interop, *interop2;
@@ -10828,6 +10968,7 @@ START_TEST(font)
     test_GetFirstMatchingFont();
     test_GetMatchingFonts();
     test_GetInformationalStrings();
+    test_empty_name_record();
     test_GetGdiInterop();
     test_CreateFontFaceFromHdc();
     test_GetSimulations();
