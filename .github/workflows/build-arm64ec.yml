@@ -1,0 +1,130 @@
+name: ARM64EC build
+
+on:
+  push:
+    branches: [upgrade/dwproton-11.0-17]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [upgrade/dwproton-11.0-17]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLVM_MINGW_VERSION: '20261117'
+      LLVM_MINGW_SHA256: 6d9442ead9ace3b3e4c3389bfef69f93f873305e0705e6cc60978ac895320872
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf bison build-essential flex perl pkg-config python3
+
+      - name: Install LLVM-MinGW
+        working-directory: ${{ runner.temp }}
+        run: |
+          archive="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-aarch64.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${archive}"
+          printf '%s  %s\n' "$LLVM_MINGW_SHA256" "$archive" | sha256sum --check
+          tar -xf "$archive"
+          echo "$RUNNER_TEMP/${archive%.tar.xz}/bin" >> "$GITHUB_PATH"
+
+      - name: Generate build files
+        run: ./autogen.sh
+
+      - name: Configure ARM64X and i386
+        run: |
+          mkdir build-arm64ec
+          cd build-arm64ec
+          ../configure --enable-option-checking=fatal \
+            --enable-archs=aarch64,arm64ec,i386 --with-mingw=llvm-mingw \
+            --disable-win16 --disable-winetest \
+            --without-x --without-wayland --without-freetype --without-gettext \
+            --without-ffmpeg --without-gstreamer 2>&1 | tee configure.log
+          grep -E '^PE_ARCHS = +aarch64 +arm64ec +i386 *$' Makefile || {
+            echo '::error::configure did not enable the expected PE architectures'
+            exit 1
+          }
+
+      - name: Build the native ntdll and server
+        working-directory: build-arm64ec
+        run: make -j"$(nproc)" dlls/ntdll/ntdll.so server/wineserver 2>&1 | tee unix-build.log
+
+      - name: Build PE ntdll and regression test executables
+        working-directory: build-arm64ec
+        run: |
+          # makedep puts the combined ARM64X binaries in aarch64-windows.
+          make -j"$(nproc)" --output-sync=target \
+            dlls/ntdll/aarch64-windows/ntdll.dll \
+            dlls/ntdll/tests/aarch64-windows/ntdll_test.exe \
+            dlls/ntdll/i386-windows/ntdll.dll \
+            dlls/ntdll/tests/i386-windows/ntdll_test.exe 2>&1 | tee pe-build.log
+
+      - name: Verify PE architectures and hybrid metadata
+        working-directory: build-arm64ec
+        run: |
+          require_field() {
+            if ! grep -Eq "$1" "$2"; then
+              echo "::error::Missing '$1' in $2"
+              return 1
+            fi
+          }
+
+          mkdir pe-reports
+          for file in dlls/ntdll/aarch64-windows/ntdll.dll \
+                      dlls/ntdll/tests/aarch64-windows/ntdll_test.exe; do
+            report="pe-reports/arm64x-${file##*/}.txt"
+            llvm-readobj --file-headers --coff-load-config "$file" > "$report"
+            require_field '^Format: COFF-ARM64X$' "$report"
+            require_field '^  Format: COFF-ARM64EC$' "$report"
+            require_field '^  CHPEMetadataPointer: 0x[0-9A-Fa-f]*[1-9A-Fa-f][0-9A-Fa-f]*$' "$report"
+            require_field '^CHPEMetadata \[$' "$report"
+            require_field '^  Version: 0x2$' "$report"
+            require_field '^  Arm64X \[$' "$report"
+            require_field ' - 0x[0-9A-Fa-f]+ +ARM64EC$' "$report"
+          done
+
+          for file in dlls/ntdll/i386-windows/ntdll.dll \
+                      dlls/ntdll/tests/i386-windows/ntdll_test.exe; do
+            report="pe-reports/i386-${file##*/}.txt"
+            llvm-readobj --file-headers "$file" > "$report"
+            require_field '^  Machine: IMAGE_FILE_MACHINE_I386 \(0x14C\)$' "$report"
+          done
+
+      - name: Report configure or build errors
+        if: failure()
+        working-directory: build-arm64ec
+        run: |
+          for log in configure.log unix-build.log pe-build.log; do
+            if [[ -f "$log" ]]; then
+              grep -m 3 -E 'error:|undefined symbol:|No rule to make target' "$log" |
+                while IFS= read -r line; do
+                  echo "::error::${line//%/%25}"
+                done || true
+            fi
+          done
+
+      - name: Upload PE binaries and build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64ec-build-${{ github.sha }}
+          retention-days: 14
+          path: |
+            build-arm64ec/*.log
+            build-arm64ec/pe-reports/
+            build-arm64ec/dlls/ntdll/*-windows/ntdll.dll
+            build-arm64ec/dlls/ntdll/tests/*-windows/ntdll_test.exe
