@@ -2545,6 +2545,16 @@ static void test_video_window_autoshow(IVideoWindow *window, IFilterGraph2 *grap
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
     ok(l == OATRUE, "Got %ld.\n", l);
 
+    hr = IVideoWindow_put_Visible(window, OAFALSE);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    hr = IMediaControl_Run(control);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+
+    hr = IVideoWindow_get_Visible(window, &l);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(l == OATRUE, "Got %ld.\n", l);
+
     hr = IMediaControl_Stop(control);
     ok(hr == S_OK, "Got hr %#lx.\n", hr);
 
