@@ -1,6 +1,10 @@
 /*
  * Termux glibc backing files for the fsync shared-memory region.
  *
+ * The region is a plain file inside the Termux temp directory. POSIX
+ * shm_open() is never used: /dev/shm is neither dependable nor in the
+ * same mount namespace as the Termux glibc prefix on Android.
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
@@ -13,7 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <sys/mman.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "wine/tgmux_paths.h"
@@ -26,29 +30,27 @@ static inline void tgmux_fsync_name( char *name, unsigned long long device, unsi
     snprintf( name, TGMUX_FSYNC_NAME_SIZE, "/wine-%llx-%llx-fsync", device, inode );
 }
 
-/* An explicit override must be the same for wineserver and all of its clients. */
+/*
+ * Backing directory for the fsync shared-memory region.
+ *
+ * Always the Termux temp directory: $WINE_FSYNC_SHM_DIR, then $WINE_TMP_DIR,
+ * then $TMPDIR, then /data/data/com.termux/files/usr/tmp. There is no
+ * /dev/shm fallback because Bionic /dev/shm is a separate mount and is
+ * frequently absent or read-only. wineserver and every client must agree,
+ * so the override is read here rather than at each call site.
+ */
 static inline const char *tgmux_fsync_dir(void)
 {
-    const char *dir = getenv( "WINE_FSYNC_SHM_DIR" );
-
-    if (dir && *dir) return dir;
-#ifdef __linux__
-    dir = tgmux_tmpdir();
-    /* Termux glibc cannot assume that /dev/shm is mounted or writable. */
-    if (!access( WINE_TGMUX_DEFAULT_TMPDIR, W_OK | X_OK ) ||
-        (access( "/dev/shm", W_OK | X_OK ) && !access( dir, W_OK | X_OK ))) return dir;
-#endif
-    return NULL;
+    return tgmux_env( "WINE_FSYNC_SHM_DIR", tgmux_tmpdir() );
 }
 
-/* Use negative flags for unlink, and native POSIX shared memory when dir is NULL. */
+/* Use negative flags for unlink. `dir` must be an absolute path. */
 static inline int tgmux_fsync_shm( const char *dir, const char *name, int flags, mode_t mode )
 {
     int ret, err;
     char *path;
 
-    if (!dir) return flags < 0 ? shm_unlink( name ) : shm_open( name, flags, mode );
-    if (dir[0] != '/')
+    if (!dir || dir[0] != '/')
     {
         errno = EINVAL;
         return -1;
