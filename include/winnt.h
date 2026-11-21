@@ -7430,7 +7430,7 @@ static FORCEINLINE LONGLONG WINAPI InterlockedCompareExchange64( LONGLONG volati
 static FORCEINLINE LONG WINAPI InterlockedExchange( LONG volatile *dest, LONG val )
 {
     LONG ret;
-#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
+#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || defined(__clang__)
     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
 #elif defined(__i386__) || defined(__x86_64__)
     __asm__ __volatile__( "lock; xchgl %0,(%1)"
@@ -7489,7 +7489,7 @@ static FORCEINLINE LONGLONG WINAPI InterlockedDecrement64( LONGLONG volatile *de
 static FORCEINLINE void * WINAPI InterlockedExchangePointer( void *volatile *dest, void *val )
 {
     void *ret;
-#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
+#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || defined(__clang__)
     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
 #elif defined(__x86_64__)
     __asm__ __volatile__( "lock; xchgq %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
@@ -7526,7 +7526,7 @@ static FORCEINLINE void MemoryBarrier(void)
     __sync_synchronize();
 }
 
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
 /* On x86, Support old GCC with either no or buggy (GCC BZ#81316) __atomic_* support */
 #define __WINE_ATOMIC_LOAD_ACQUIRE(ptr, ret) do { C_ASSERT(sizeof(*(ptr)) <= sizeof(void *)); *(ret) = *(ptr); __asm__ __volatile__( "" ::: "memory" ); } while (0)
 #define __WINE_ATOMIC_LOAD_RELAXED(ptr, ret) do { C_ASSERT(sizeof(*(ptr)) <= sizeof(void *)); *(ret) = *(ptr); } while (0)
@@ -7537,7 +7537,7 @@ static FORCEINLINE void MemoryBarrier(void)
 #define __WINE_ATOMIC_LOAD_RELAXED(ptr, ret) __atomic_load(ptr, ret, __ATOMIC_RELAXED)
 #define __WINE_ATOMIC_STORE_RELEASE(ptr, val) __atomic_store(ptr, val, __ATOMIC_RELEASE)
 #define __WINE_ATOMIC_STORE_RELAXED(ptr, val) __atomic_store(ptr, val, __ATOMIC_RELAXED)
-#endif  /* defined(__x86_64__) || defined(__i386__) */
+#endif
 
 static FORCEINLINE CHAR ReadAcquire8( CHAR const volatile *src )
 {
