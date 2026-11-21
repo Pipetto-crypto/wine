@@ -121,7 +121,7 @@ struct wg_parser
     bool use_opengl;
     GstContext *context;
 };
-static const unsigned int input_cache_chunk_size = 512 << 10;
+static const unsigned int input_cache_chunk_size = 256 << 10;
 
 struct wg_parser_stream
 {
@@ -1661,9 +1661,6 @@ static GstFlowReturn src_getrange_cb(GstPad *pad, GstObject *parent,
         GST_LOG("Returning empty buffer.");
         return GST_FLOW_OK;
     }
-
-    if (size >= input_cache_chunk_size || sizeof(void*) == 4)
-        return issue_read_request(parser, offset, size, buffer);
 
     if (offset >= parser->file_size)
         return GST_FLOW_EOS;
