@@ -1491,8 +1491,7 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
 {
     GLXContext ctx = NtCurrentTeb()->glReserved2;
     struct gl_drawable *gl = impl_from_opengl_drawable( base );
-    struct opengl_context *gl_ctx = NtCurrentTeb()->glContext;
-    INT64 ust, msc, sbc, target_sbc;
+        INT64 ust, msc, sbc, target_sbc;
     float viewport_old[4], viewport[4];
     BOOL offscreen, waited = FALSE;
 
@@ -1511,12 +1510,6 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
             waited = pglXWaitForSbcOML( gdi_display, gl->drawable, target_sbc, &ust, &msc, &sbc );
     }
 
-    if (wgl_ctx && wgl_ctx->has_GL_ARB_viewport_array)
-    {
-        /* Avoid setting old viewport when not needed, it may be costly in some cases. */
-        funcs->p_glGetFloati_v( GL_VIEWPORT, 0, viewport );
-        if (memcmp( viewport, viewport_old, sizeof(viewport) )) funcs->p_glViewportIndexedfv( 0, viewport_old );
-    }
 
     if (offscreen && !waited) XFlush( gdi_display );
 
@@ -1603,7 +1596,7 @@ static struct opengl_driver_funcs x11drv_driver_funcs =
     .p_get_proc_address = x11drv_get_proc_address,
     .p_init_pixel_formats = x11drv_init_pixel_formats,
     .p_describe_pixel_format = x11drv_describe_pixel_format,
-    .p_init_wgl_extensions = x11drv_init_wgl_extensions,
+    .p_init_extensions = x11drv_init_wgl_extensions,
     .p_surface_create = x11drv_surface_create,
     .p_context_create = x11drv_context_create,
     .p_context_destroy = x11drv_context_destroy,
