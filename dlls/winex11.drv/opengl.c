@@ -1491,14 +1491,14 @@ static BOOL x11drv_surface_swap( struct opengl_drawable *base )
 {
     GLXContext ctx = NtCurrentTeb()->glReserved2;
     struct gl_drawable *gl = impl_from_opengl_drawable( base );
-    struct wgl_context *wgl_ctx = NtCurrentTeb()->glContext;
+    struct opengl_context *gl_ctx = NtCurrentTeb()->glContext;
     INT64 ust, msc, sbc, target_sbc;
     float viewport_old[4], viewport[4];
     BOOL offscreen, waited = FALSE;
 
     TRACE( "drawable %s\n", debugstr_opengl_drawable( base ) );
 
-    if (wgl_ctx && wgl_ctx->has_GL_ARB_viewport_array) funcs->p_glGetFloati_v( GL_VIEWPORT, 0, viewport_old );
+    /* viewport_array hook moved to opengl32 client side in 11.8 */
 
     if (!(offscreen = InterlockedCompareExchange( &base->client->offscreen, 0, 0 )) ||
         !ctx || !pglXSwapBuffersMscOML) pglXSwapBuffers( gdi_display, gl->drawable );

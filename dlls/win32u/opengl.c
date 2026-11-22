@@ -660,7 +660,7 @@ static void egldrv_init_extensions( struct opengl_funcs *funcs, BOOLEAN extensio
 {
 }
 
-static BOOL egldrv_surface_create( HWND hwnd, int format, struct opengl_drawable **drawable )
+static BOOL egldrv_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_drawable **drawable )
 {
     struct client_surface *client;
 
@@ -1276,7 +1276,7 @@ static void nulldrv_init_extensions( struct opengl_funcs *funcs, BOOLEAN extensi
 {
 }
 
-static BOOL nulldrv_surface_create( HWND hwnd, int format, struct opengl_drawable **drawable )
+static BOOL nulldrv_surface_create( HWND hwnd, BOOL raw, int format, struct opengl_drawable **drawable )
 {
     return TRUE;
 }
@@ -1407,7 +1407,7 @@ static struct opengl_drawable *get_window_unused_drawable( HWND hwnd, int format
      */
     if (!drawable)
     {
-        driver_funcs->p_surface_create( hwnd, format, &drawable );
+        driver_funcs->p_surface_create( hwnd, FALSE, format, &drawable );
         if (drawable && drawable->client) add_window_client_surface( hwnd, drawable->client );
     }
 
