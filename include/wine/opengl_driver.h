@@ -243,7 +243,7 @@ struct opengl_driver_funcs
     UINT (*p_init_pixel_formats)(UINT*);
     BOOL (*p_describe_pixel_format)(int,struct wgl_pixel_format*);
     void (*p_init_extensions)( struct opengl_funcs *funcs, BOOLEAN extensions[GL_EXTENSION_COUNT] );
-    BOOL (*p_surface_create)( HWND hwnd, int format, struct opengl_drawable **drawable );
+    BOOL (*p_surface_create)( HWND hwnd, BOOL raw, int format, struct opengl_drawable **drawable );
     BOOL (*p_context_create)( int format, void *share, const int *attribs, void **context );
     BOOL (*p_context_destroy)(void*);
     BOOL (*p_make_current)( struct opengl_drawable *draw, struct opengl_drawable *read, void *private );
