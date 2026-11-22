@@ -390,6 +390,11 @@ jobs:
           #   的 -m32 单架构分支，由 archs 决定 PE 侧编哪几个架构；
           #   --without-wayland/ldap/capi/cups/dbus/oss/usb/v4l2 等在 Termux 上没有
           #   对应库或没有意义，关掉以减少依赖面与包体积。
+          # Force the GLX-only path: the Termux/glibc bundle ships a stub
+          # libEGL.so.1 (symlink to libGL) that exports no EGL symbols, so
+          # 11.8's egl_init() hard-fails and the display driver never loads.
+          export ac_cv_lib_soname_EGL=no
+
           ../configure \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
